@@ -1,9 +1,10 @@
-# signin
+# Signin Mod (Fabric 1.20.1)
 
-## Setup
+Daily sign-in mod for Minecraft Fabric 1.20.1, with client GUI + server data sync.
 
-For setup instructions, please see the [Fabric Documentation page](https://docs.fabricmc.net/develop/getting-started/creating-a-project#setting-up) related to the IDE that you are using.
+- 中文介绍: [README.zh.md](./README.zh.md)
+- English (US): [README.us.md](./README.us.md)
 
 ## License
 
-This template is available under the CC0 license. Feel free to learn from it and incorporate it in your own projects.
+This project uses the license in [LICENSE](./LICENSE).
