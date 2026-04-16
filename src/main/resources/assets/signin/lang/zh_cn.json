@@ -2,6 +2,8 @@
   "gui.common.close": "关闭",
   "gui.common.back": "返回",
   "gui.common.scroll_page": "滚轮 %s/%s",
+  "key.categories.signin": "签到模组",
+  "key.signin.open_gui": "打开签到界面",
   "gui.common.error.non_negative": "%s 不能为负数。",
   "gui.common.error.integer_required": "%s 必须是整数。",
   "gui.signin.title": "签到中心",

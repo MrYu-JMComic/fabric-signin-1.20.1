@@ -2,6 +2,8 @@
   "gui.common.close": "Close",
   "gui.common.back": "Back",
   "gui.common.scroll_page": "Scroll %s/%s",
+  "key.categories.signin": "Signin Mod",
+  "key.signin.open_gui": "Open Sign-in GUI",
   "gui.common.error.non_negative": "%s cannot be negative.",
   "gui.common.error.integer_required": "%s must be an integer.",
   "gui.signin.title": "Sign-in Center",

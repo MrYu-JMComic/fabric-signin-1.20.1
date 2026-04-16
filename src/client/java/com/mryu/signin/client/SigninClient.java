@@ -3,6 +3,7 @@ package com.mryu.signin.client;
 import com.mryu.signin.Signin;
 import com.mryu.signin.client.gui.SigninScreen;
 import com.mryu.signin.client.gui.RewardEditorScreen;
+import com.mryu.signin.client.input.SigninKeyBindings;
 import com.mryu.signin.client.network.SigninClientActions;
 import com.mryu.signin.client.state.ClientSigninState;
 import com.mryu.signin.network.SigninNetworking;
@@ -13,6 +14,8 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 public class SigninClient implements ClientModInitializer {
 	@Override
 	public void onInitializeClient() {
+		SigninKeyBindings.register();
+
 		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> client.execute(() -> {
 			ClientSigninState.clear();
 			SigninClientActions.requestSync();
