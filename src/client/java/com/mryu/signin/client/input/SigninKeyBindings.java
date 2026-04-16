@@ -25,9 +25,16 @@ public final class SigninKeyBindings {
 				if (client.player == null || client.world == null) {
 					continue;
 				}
-				if (client.currentScreen != null || client.currentScreen instanceof SigninScreen) {
+
+				if (client.currentScreen instanceof SigninScreen) {
+					client.currentScreen.close();
 					continue;
 				}
+
+				if (client.currentScreen != null) {
+					continue;
+				}
+
 				client.setScreen(new SigninScreen());
 				SigninClientActions.requestSync();
 			}
