@@ -2,14 +2,14 @@
 	"schemaVersion": 1,
 	"id": "signin",
 	"version": "${version}",
-	"name": "signin",
-	"description": "This is an example description! Tell everyone what your mod is about!",
+	"name": "YeeYee Signin",
+	"description": "签到中心 Signin: Fabric 1.20.1 每日签到、补签卡、奖励可视化编辑与快捷键打开 GUI。",
 	"authors": [
 		"YeeYee000"
 	],
 	"contact": {
-		"homepage": "https://fabricmc.net/",
-		"sources": "https://github.com/FabricMC/fabric-example-mod"
+		"homepage": "https://github.com/MrYu-JMComic/fabric-signin-1.20.1",
+		"sources": "https://github.com/MrYu-JMComic/fabric-signin-1.20.1"
 	},
 	"license": "CC0-1.0",
 	"icon": "assets/signin/icon.png",
