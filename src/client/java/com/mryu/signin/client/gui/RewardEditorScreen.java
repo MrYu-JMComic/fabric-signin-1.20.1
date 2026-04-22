@@ -10,6 +10,7 @@ import com.mryu.signin.data.RewardEntry;
 import com.mryu.signin.data.RewardItemEntry;
 import com.mryu.signin.data.SigninConfigState;
 import com.mryu.signin.network.PlayerSyncPayload;
+import com.mryu.signin.util.CalendarDayUtil;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
@@ -21,6 +22,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.util.Identifier;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -28,10 +30,10 @@ import java.util.List;
 import java.util.Map;
 
 public class RewardEditorScreen extends Screen {
-	private static final int MIN_PANEL_WIDTH = 500;
-	private static final int MAX_PANEL_WIDTH = 1180;
+	private static final int MIN_PANEL_WIDTH = 520;
+	private static final int MAX_PANEL_WIDTH = 1260;
 	private static final int MIN_PANEL_HEIGHT = 260;
-	private static final int MAX_PANEL_HEIGHT = 640;
+	private static final int MAX_PANEL_HEIGHT = 680;
 	private static final int PANEL_MARGIN = 18;
 
 	private static final int ROW_HEIGHT = 46;
@@ -45,12 +47,19 @@ public class RewardEditorScreen extends Screen {
 	private final List<RowWidgets> rows = new ArrayList<>();
 	private final List<RewardEntry> draftRewards = new ArrayList<>();
 	private final Map<Integer, RewardRowVisual> rewardVisualCache = new HashMap<>();
+	private final int initialDisplayMonth;
 
 	private int panelLeft;
 	private int panelTop;
 	private int panelWidth;
 	private int panelHeight;
 	private int rowScroll;
+	private int displayYear;
+	private int displayMonth;
+	private int monthStartDay;
+	private int monthEndDay;
+	private int pendingFocusDay = -1;
+
 	private int rowDayX;
 	private int rowXpX;
 	private int rowCardX;
@@ -62,7 +71,6 @@ public class RewardEditorScreen extends Screen {
 	private int rowHeldX;
 	private int rowManageWidth;
 	private int rowHeldWidth;
-	private boolean rowCompact;
 
 	private int lastScreenWidth = -1;
 	private int lastScreenHeight = -1;
@@ -71,22 +79,26 @@ public class RewardEditorScreen extends Screen {
 	private ButtonWidget saveButton;
 	private ButtonWidget resetButton;
 	private ButtonWidget backButton;
+	private ButtonWidget prevMonthButton;
+	private ButtonWidget nextMonthButton;
 	private Text statusText = Text.empty();
 	private int statusColor = 0xFFB4CED4;
 
 	public RewardEditorScreen(Screen parent) {
-		this(parent, List.of(), 0, Text.empty(), 0xFFB4CED4);
+		this(parent, List.of(), 0, 0, Text.empty(), 0xFFB4CED4);
 	}
 
 	public RewardEditorScreen(
 		Screen parent,
 		List<RewardEntry> initialDraft,
+		int initialDisplayMonth,
 		int initialRowScroll,
 		Text initialStatusText,
 		int initialStatusColor
 	) {
 		super(Text.translatable("gui.reward_editor.title"));
 		this.parent = parent;
+		this.initialDisplayMonth = initialDisplayMonth;
 		this.draftRewards.addAll(initialDraft);
 		this.rowScroll = Math.max(0, initialRowScroll);
 		this.statusText = initialStatusText == null ? Text.empty() : initialStatusText;
@@ -101,8 +113,17 @@ public class RewardEditorScreen extends Screen {
 			return;
 		}
 
-		loadDraftIfNeeded(payload.rewards());
-		buildRowWidgets();
+		displayYear = payload.rewardYear();
+		displayMonth = initialDisplayMonth > 0
+			? Math.max(1, Math.min(12, initialDisplayMonth))
+			: CalendarDayUtil.monthFromDayOfYear(payload.rewardYear(), payload.todayDayOfYear());
+		if (initialDisplayMonth <= 0) {
+			pendingFocusDay = payload.todayDayOfYear();
+		}
+
+		loadDraftIfNeeded(payload.rewards(), payload.daysInYear(), payload.rewardYear());
+		refreshMonthBounds();
+		buildRowWidgetsForCurrentMonth();
 		buildFooterButtons();
 		ensureLayout(true);
 	}
@@ -126,16 +147,39 @@ public class RewardEditorScreen extends Screen {
 		);
 		UiRender.drawRoundedRect(context, panelLeft, panelTop, panelLeft + panelWidth, panelTop + HEADER_HEIGHT, 8, UiTheme.PANEL_HEADER);
 
-		context.drawCenteredTextWithShadow(textRenderer, title.copy().formatted(Formatting.BOLD), width / 2, panelTop + 11, 0xFF5A412C);
-		context.drawTextWithShadow(textRenderer, Text.translatable("gui.reward_editor.subtitle"), panelLeft + 14, panelTop + HEADER_HEIGHT + 2, UiTheme.TEXT_MUTED);
+		Text titleText = title.copy().formatted(Formatting.BOLD);
+		context.drawText(textRenderer, titleText, (width - textRenderer.getWidth(titleText)) / 2, panelTop + 11, 0xFF5A412C, false);
+		int totalPages = Math.max(1, rows.size() - getVisibleRowCount() + 1);
+		int monthControlLeft = panelLeft + panelWidth - 108;
+		String pageText = totalPages > 1 ? Text.translatable("gui.common.scroll_page", rowScroll + 1, totalPages).getString() : "";
+		int pageWidth = pageText.isEmpty() ? 0 : textRenderer.getWidth(pageText);
+		String subtitle = Text.translatable("gui.reward_editor.subtitle_month", displayYear, displayMonth).getString();
+		int subtitleRight = monthControlLeft - 10;
+		if (totalPages > 1) {
+			subtitleRight = monthControlLeft - pageWidth - 18;
+		}
+		int subtitleMaxWidth = Math.max(80, subtitleRight - (panelLeft + 14));
+		context.drawText(
+			textRenderer,
+			Text.literal(UiRender.ellipsize(textRenderer, subtitle, subtitleMaxWidth)),
+			panelLeft + 14,
+			panelTop + HEADER_HEIGHT + 2,
+			UiTheme.TEXT_MUTED,
+			false
+		);
 
-		if (rows.size() > getVisibleRowCount()) {
-			context.drawTextWithShadow(
+		if (totalPages > 1) {
+			int pageX = monthControlLeft - pageWidth - 8;
+			if (pageX < panelLeft + 14) {
+				pageX = panelLeft + 14;
+			}
+			context.drawText(
 				textRenderer,
-				Text.translatable("gui.common.scroll_page", rowScroll + 1, Math.max(1, rows.size() - getVisibleRowCount() + 1)),
-				panelLeft + panelWidth - 56,
+				Text.literal(pageText),
+				pageX,
 				panelTop + HEADER_HEIGHT + 2,
-				ACCENT
+				ACCENT,
+				false
 			);
 		}
 
@@ -196,37 +240,49 @@ public class RewardEditorScreen extends Screen {
 			if (reward.day() != day) {
 				continue;
 			}
-			draftRewards.set(i, new RewardEntry(day, reward.xp(), items, reward.makeupCardReward()));
+			RewardEntry updated = new RewardEntry(day, reward.xp(), items, reward.makeupCardReward());
+			draftRewards.set(i, updated);
+			rewardVisualCache.remove(day);
 			setStatus(Text.translatable("gui.reward_editor.status.day_items_updated", day, items.size()).getString(), 0xFF9CF2D7);
 			break;
 		}
-		rebuildEditor();
+		rebuildEditor(displayMonth, rowScroll, statusText, statusColor);
 	}
 
-	private void buildRowWidgets() {
+	private void buildRowWidgetsForCurrentMonth() {
 		rows.clear();
-		for (RewardEntry reward : draftRewards) {
+		rewardVisualCache.clear();
+		for (int day = monthStartDay; day <= monthEndDay; day++) {
+			RewardEntry reward = getDraftByDay(day);
+
 			TextFieldWidget xpField = addDrawableChild(new TextFieldWidget(textRenderer, 0, 0, 64, 16, Text.translatable("gui.reward_editor.header.xp")));
-			xpField.setMaxLength(6);
+			xpField.setMaxLength(8);
 			xpField.setText(String.valueOf(reward.xp()));
 
 			TextFieldWidget cardField = addDrawableChild(new TextFieldWidget(textRenderer, 0, 0, 64, 16, Text.translatable("gui.reward_editor.header.card")));
-			cardField.setMaxLength(5);
+			cardField.setMaxLength(6);
 			cardField.setText(String.valueOf(reward.makeupCardReward()));
 
-			int day = reward.day();
-			ButtonWidget manageItemsButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.reward_editor.button.manage_items"), button -> openItemsEditor(day))
-				.dimensions(0, 0, 84, 20)
+			final int rewardDay = day;
+			ButtonWidget manageItemsButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.reward_editor.button.manage_items"), button -> openItemsEditor(rewardDay))
+				.dimensions(0, 0, 94, 20)
 				.build());
-			ButtonWidget heldAppendButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.reward_editor.button.held_append"), button -> appendHeldItem(day))
-				.dimensions(0, 0, 54, 20)
+			ButtonWidget heldAppendButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.reward_editor.button.held_append"), button -> appendHeldItem(rewardDay))
+				.dimensions(0, 0, 62, 20)
 				.build());
 
-			rows.add(new RowWidgets(day, xpField, cardField, manageItemsButton, heldAppendButton));
+			rows.add(new RowWidgets(rewardDay, xpField, cardField, manageItemsButton, heldAppendButton));
 		}
 	}
 
 	private void buildFooterButtons() {
+		prevMonthButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.common.prev"), button -> switchMonth(-1))
+			.dimensions(0, 0, 20, 18)
+			.build());
+		nextMonthButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.common.next"), button -> switchMonth(1))
+			.dimensions(0, 0, 20, 18)
+			.build());
+
 		saveButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.reward_editor.button.save"), button -> saveChanges())
 			.dimensions(0, 0, 150, 20)
 			.build());
@@ -240,10 +296,10 @@ public class RewardEditorScreen extends Screen {
 
 	private void drawTableHeader(DrawContext context) {
 		int y = getRowsTop() - 12;
-		context.drawTextWithShadow(textRenderer, Text.translatable("gui.reward_editor.header.day"), rowDayX, y, UiTheme.TEXT_MUTED);
-		context.drawTextWithShadow(textRenderer, Text.translatable("gui.reward_editor.header.xp"), rowXpX + 2, y, UiTheme.TEXT_MUTED);
-		context.drawTextWithShadow(textRenderer, Text.translatable("gui.reward_editor.header.card"), rowCardX + 2, y, UiTheme.TEXT_MUTED);
-		context.drawTextWithShadow(textRenderer, Text.translatable("gui.reward_editor.header.items"), rowIconX + 22, y, UiTheme.TEXT_MUTED);
+		context.drawText(textRenderer, Text.translatable("gui.reward_editor.header.day"), rowDayX, y, UiTheme.TEXT_MUTED, false);
+		context.drawText(textRenderer, Text.translatable("gui.reward_editor.header.xp"), rowXpX + 1, y, UiTheme.TEXT_MUTED, false);
+		context.drawText(textRenderer, Text.translatable("gui.reward_editor.header.card"), rowCardX + 1, y, UiTheme.TEXT_MUTED, false);
+		context.drawText(textRenderer, Text.translatable("gui.reward_editor.header.items"), rowIconX + 22, y, UiTheme.TEXT_MUTED, false);
 	}
 
 	private void drawRowCards(DrawContext context, int mouseX, int mouseY) {
@@ -259,7 +315,7 @@ public class RewardEditorScreen extends Screen {
 			int rowColor = (index % 2 == 0) ? ROW_A : ROW_B;
 			UiRender.drawRoundedRect(context, panelLeft + 12, rowTop - 1, panelLeft + panelWidth - 12, rowTop + ROW_HEIGHT - 2, 4, rowColor);
 
-			context.drawText(textRenderer, Text.translatable("text.signin.day_label", row.day), rowDayX, rowTop + 16, UiTheme.TEXT_PRIMARY, false);
+			context.drawText(textRenderer, Text.translatable("text.signin.day_label", CalendarDayUtil.monthDayLabel(displayYear, row.day)), rowDayX, rowTop + 16, UiTheme.TEXT_PRIMARY, false);
 
 			RewardRowVisual visual = getRewardRowVisual(reward);
 			ItemStack icon = visual.icon();
@@ -269,30 +325,14 @@ public class RewardEditorScreen extends Screen {
 			context.drawItem(icon, iconX, iconY);
 			context.drawItemInSlot(textRenderer, icon, iconX, iconY);
 
-			String summary = visual.summary();
-			if (rowSummaryWidth >= 40) {
-				context.drawText(
-					textRenderer,
-					Text.literal(UiRender.ellipsize(textRenderer, summary, rowSummaryWidth)),
-					rowSummaryX,
-					rowTop + 16,
-					UiTheme.TEXT_PRIMARY,
-					false
-				);
-			} else {
-				int fallbackWidth = Math.max(0, rowManageX - (iconX + 22) - 8);
-				if (fallbackWidth > 8) {
-					String fallback = Text.translatable("gui.reward_editor.item_types_count", reward.items().size()).getString();
-					context.drawText(
-						textRenderer,
-						Text.literal(UiRender.ellipsize(textRenderer, fallback, fallbackWidth)),
-						iconX + 22,
-						rowTop + 16,
-						UiTheme.TEXT_PRIMARY,
-						false
-					);
-				}
-			}
+			context.drawText(
+				textRenderer,
+				Text.literal(UiRender.ellipsize(textRenderer, visual.summary(), rowSummaryWidth)),
+				rowSummaryX,
+				rowTop + 16,
+				UiTheme.TEXT_PRIMARY,
+				false
+			);
 
 			boolean inRewardIcon = mouseX >= iconX && mouseX <= iconX + 16 && mouseY >= iconY && mouseY <= iconY + 16;
 			if (inRewardIcon) {
@@ -316,9 +356,9 @@ public class RewardEditorScreen extends Screen {
 		if (icon.getItem() == Items.BARRIER && reward.items().isEmpty()) {
 			icon = new ItemStack(Items.BARRIER);
 		}
+
 		String summary = Text.translatable("gui.reward_editor.summary", reward.items().size(), RewardDisplayUtil.localizedItemSummary(reward.items(), 2)).getString();
 		List<String> itemLines = RewardDisplayUtil.localizedItemLines(reward.items());
-
 		RewardRowVisual visual = new RewardRowVisual(reward, icon, summary, itemLines);
 		rewardVisualCache.put(reward.day(), visual);
 		return visual;
@@ -326,7 +366,7 @@ public class RewardEditorScreen extends Screen {
 
 	private List<Text> buildRewardTooltipLines(int day, RewardEntry reward, List<String> itemLines, int maxWidth) {
 		List<Text> lines = new ArrayList<>();
-		lines.add(Text.translatable("gui.reward_editor.tooltip_head", day, reward.xp(), reward.makeupCardReward()));
+		lines.add(Text.translatable("gui.reward_editor.tooltip_head", CalendarDayUtil.monthDayLabel(displayYear, day), reward.xp(), reward.makeupCardReward()));
 		for (int i = 0; i < itemLines.size(); i++) {
 			lines.addAll(UiRender.wrapTooltipLines(
 				textRenderer,
@@ -335,6 +375,16 @@ public class RewardEditorScreen extends Screen {
 			));
 		}
 		return lines;
+	}
+
+	private void switchMonth(int delta) {
+		int nextMonth = Math.max(1, Math.min(12, displayMonth + delta));
+		if (nextMonth == displayMonth) {
+			return;
+		}
+		captureDraftFromWidgets();
+		pendingFocusDay = -1;
+		rebuildEditor(nextMonth, 0, statusText, statusColor);
 	}
 
 	private void openItemsEditor(int day) {
@@ -370,77 +420,109 @@ public class RewardEditorScreen extends Screen {
 			List<RewardItemEntry> items = new ArrayList<>(reward.items());
 			items.add(new RewardItemEntry(id.toString(), count, data));
 			draftRewards.set(i, new RewardEntry(day, reward.xp(), items, reward.makeupCardReward()));
+			rewardVisualCache.remove(day);
 			setStatus(Text.translatable("gui.reward_editor.status.append_held_ok", day).getString(), 0xFF9CF2D7);
 			break;
 		}
-		rebuildEditor();
+		rebuildEditor(displayMonth, rowScroll, statusText, statusColor);
 	}
 
 	private void saveChanges() {
-		List<RewardEntry> rewards = new ArrayList<>(rows.size());
 		for (RowWidgets row : rows) {
 			int xp = parseNonNegativeInt(row.xpField.getText(), Text.translatable("gui.reward_editor.header.xp").getString());
 			if (xp < 0) {
 				return;
 			}
-
 			int cardCount = parseNonNegativeInt(row.cardField.getText(), Text.translatable("gui.reward_editor.header.card").getString());
 			if (cardCount < 0) {
 				return;
 			}
-
-			RewardEntry source = getDraftByDay(row.day);
-			rewards.add(new RewardEntry(row.day, xp, source.items(), cardCount));
+			updateDraftValue(row.day, xp, cardCount);
 		}
 
-		draftRewards.clear();
-		draftRewards.addAll(rewards);
-		SigninClientActions.saveRewards(rewards);
+		draftRewards.sort(Comparator.comparingInt(RewardEntry::day));
+		SigninClientActions.saveRewards(draftRewards);
 		setStatus(Text.translatable("gui.reward_editor.status.save_sent").getString(), 0xFF9CF2D7);
 	}
 
 	private void resetDefaults() {
 		draftRewards.clear();
-		draftRewards.addAll(SigninConfigState.defaultRewards());
-		rebuildEditor();
+		draftRewards.addAll(SigninConfigState.defaultRewardsForYear(displayYear));
 		setStatus(Text.translatable("gui.reward_editor.status.reset_done").getString(), 0xFF9EC9FF);
+		rebuildEditor(displayMonth, 0, statusText, statusColor);
 	}
 
-	private void rebuildEditor() {
+	private void rebuildEditor(int targetMonth, int targetScroll, Text status, int color) {
 		if (client != null) {
 			client.setScreen(new RewardEditorScreen(
 				parent,
 				new ArrayList<>(draftRewards),
-				rowScroll,
-				statusText,
-				statusColor
+				targetMonth,
+				targetScroll,
+				status,
+				color
 			));
 		}
 	}
 
 	private void captureDraftFromWidgets() {
-		if (rows.isEmpty()) {
-			return;
-		}
-
-		List<RewardEntry> snapshot = new ArrayList<>(rows.size());
 		for (RowWidgets row : rows) {
-			RewardEntry source = getDraftByDay(row.day);
 			int xp = parsePositiveOrZero(row.xpField.getText());
 			int card = parsePositiveOrZero(row.cardField.getText());
-			snapshot.add(new RewardEntry(row.day, xp, source.items(), card));
+			updateDraftValue(row.day, xp, card);
 		}
-		draftRewards.clear();
-		draftRewards.addAll(snapshot);
 		draftRewards.sort(Comparator.comparingInt(RewardEntry::day));
 	}
 
-	private void loadDraftIfNeeded(List<RewardEntry> rewardsFromServer) {
-		if (!draftRewards.isEmpty()) {
-			draftRewards.sort(Comparator.comparingInt(RewardEntry::day));
+	private void updateDraftValue(int day, int xp, int card) {
+		for (int i = 0; i < draftRewards.size(); i++) {
+			RewardEntry source = draftRewards.get(i);
+			if (source.day() != day) {
+				continue;
+			}
+			RewardEntry updated = new RewardEntry(day, Math.max(0, xp), source.items(), Math.max(0, card));
+			draftRewards.set(i, updated);
+			rewardVisualCache.remove(day);
 			return;
 		}
-		draftRewards.addAll(rewardsFromServer.stream().sorted(Comparator.comparingInt(RewardEntry::day)).toList());
+		draftRewards.add(new RewardEntry(day, Math.max(0, xp), List.of(), Math.max(0, card)));
+	}
+
+	private void loadDraftIfNeeded(List<RewardEntry> rewardsFromServer, int daysInYear, int year) {
+		if (draftRewards.isEmpty()) {
+			draftRewards.addAll(rewardsFromServer.stream().sorted(Comparator.comparingInt(RewardEntry::day)).toList());
+		}
+		ensureDraftShape(daysInYear, year);
+	}
+
+	private void ensureDraftShape(int daysInYear, int year) {
+		List<RewardEntry> defaults = SigninConfigState.defaultRewardsForYear(year);
+		Map<Integer, RewardEntry> map = new HashMap<>(daysInYear);
+		for (RewardEntry reward : defaults) {
+			map.put(reward.day(), reward);
+		}
+		for (RewardEntry reward : draftRewards) {
+			if (reward == null) {
+				continue;
+			}
+			RewardEntry fixed = reward.normalized();
+			if (fixed.day() < 1 || fixed.day() > daysInYear) {
+				continue;
+			}
+			map.put(fixed.day(), new RewardEntry(fixed.day(), fixed.xp(), fixed.items(), fixed.makeupCardReward()));
+		}
+
+		draftRewards.clear();
+		for (int day = 1; day <= daysInYear; day++) {
+			draftRewards.add(map.get(day));
+		}
+		draftRewards.sort(Comparator.comparingInt(RewardEntry::day));
+	}
+
+	private void refreshMonthBounds() {
+		CalendarDayUtil.MonthRange monthRange = CalendarDayUtil.monthRange(displayYear, displayMonth);
+		monthStartDay = monthRange.startDay();
+		monthEndDay = monthRange.endDay();
 	}
 
 	private RewardEntry getDraftByDay(int day) {
@@ -486,7 +568,7 @@ public class RewardEditorScreen extends Screen {
 	}
 
 	private void updateRowWidgetLayout() {
-		if (saveButton == null || resetButton == null || backButton == null) {
+		if (saveButton == null || resetButton == null || backButton == null || prevMonthButton == null || nextMonthButton == null) {
 			return;
 		}
 
@@ -496,23 +578,28 @@ public class RewardEditorScreen extends Screen {
 		if (rowScroll > maxScroll) {
 			rowScroll = maxScroll;
 		}
+		if (pendingFocusDay >= monthStartDay && pendingFocusDay <= monthEndDay) {
+			int targetIndex = pendingFocusDay - monthStartDay;
+			rowScroll = Math.max(0, Math.min(maxScroll, targetIndex - visibleRows / 2));
+			pendingFocusDay = -1;
+		}
 
 		int rowLeft = panelLeft + 12;
 		int rowRight = panelLeft + panelWidth - 12;
-		rowCompact = panelWidth < 760;
-		rowFieldWidth = rowCompact ? 50 : 58;
-		rowManageWidth = rowCompact ? 70 : 80;
-		rowHeldWidth = rowCompact ? 48 : 52;
-		int buttonGap = 4;
+
+		rowFieldWidth = panelWidth < 760 ? 56 : 68;
+		rowManageWidth = panelWidth < 760 ? 96 : 112;
+		rowHeldWidth = panelWidth < 760 ? 66 : 78;
+		int buttonGap = 6;
 
 		rowHeldX = rowRight - 8 - rowHeldWidth;
 		rowManageX = rowHeldX - buttonGap - rowManageWidth;
 		rowDayX = rowLeft + 8;
-		rowXpX = rowDayX + (rowCompact ? 40 : 46);
-		rowCardX = rowXpX + rowFieldWidth + (rowCompact ? 8 : 10);
-		rowIconX = rowCardX + rowFieldWidth + (rowCompact ? 8 : 12);
+		rowXpX = rowDayX + 42;
+		rowCardX = rowXpX + rowFieldWidth + 10;
+		rowIconX = rowCardX + rowFieldWidth + 14;
 		rowSummaryX = rowIconX + 22;
-		rowSummaryWidth = rowManageX - 8 - rowSummaryX;
+		rowSummaryWidth = Math.max(36, rowManageX - 10 - rowSummaryX);
 
 		for (int i = 0; i < rows.size(); i++) {
 			RowWidgets row = rows.get(i);
@@ -545,6 +632,11 @@ public class RewardEditorScreen extends Screen {
 			row.manageItemsButton.active = visible;
 			row.heldAppendButton.active = visible;
 		}
+
+		prevMonthButton.setPosition(panelLeft + panelWidth - 108, panelTop + HEADER_HEIGHT + 1);
+		nextMonthButton.setPosition(panelLeft + panelWidth - 84, panelTop + HEADER_HEIGHT + 1);
+		prevMonthButton.active = displayMonth > 1;
+		nextMonthButton.active = displayMonth < 12;
 
 		saveButton.setPosition(panelLeft + panelWidth - 170, panelTop + panelHeight - 28);
 		resetButton.setPosition(panelLeft + panelWidth - 332, panelTop + panelHeight - 28);
@@ -605,7 +697,6 @@ public class RewardEditorScreen extends Screen {
 		int chipH = STATUS_HEIGHT;
 
 		UiRender.drawRoundedRect(context, chipX, chipY, chipX + chipW, chipY + chipH, 5, UiTheme.STATUS_CHIP);
-
 		context.drawText(
 			textRenderer,
 			Text.literal(UiRender.ellipsize(textRenderer, statusText.getString(), chipW - 10)),

@@ -10,6 +10,7 @@ import com.mryu.signin.data.PlayerSigninRecord;
 import com.mryu.signin.data.RewardEntry;
 import com.mryu.signin.data.RewardItemEntry;
 import com.mryu.signin.network.PlayerSyncPayload;
+import com.mryu.signin.util.CalendarDayUtil;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
@@ -19,31 +20,41 @@ import net.minecraft.util.Formatting;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class SigninScreen extends Screen {
 	private static final int MIN_PANEL_WIDTH = 320;
-	private static final int MAX_PANEL_WIDTH = 760;
+	private static final int MAX_PANEL_WIDTH = 860;
 	private static final int MIN_PANEL_HEIGHT = 240;
-	private static final int MAX_PANEL_HEIGHT = 360;
+	private static final int MAX_PANEL_HEIGHT = 420;
 	private static final int PANEL_MARGIN = 16;
 	private static final int HEADER_HEIGHT = 30;
 	private static final int STATUS_HEIGHT = 18;
-
 	private static final int REWARD_ROW_TALL = 22;
 	private static final int REWARD_ROW_SMALL = 20;
+	private static final int ROW_COLOR_SIGNED = 0x8CCAF3D0;
+	private static final int ROW_COLOR_MISSED = 0x8CF8CDC3;
+	private static final int ROW_COLOR_UNSIGNED = 0x76FFEBD2;
 
 	private ButtonWidget signButton;
 	private ButtonWidget makeupButton;
 	private ButtonWidget refreshButton;
 	private ButtonWidget editButton;
 	private ButtonWidget closeButton;
+	private ButtonWidget prevMonthButton;
+	private ButtonWidget nextMonthButton;
 
 	private int panelLeft;
 	private int panelTop;
 	private int panelWidth;
 	private int panelHeight;
 	private int rewardScroll;
+	private int displayYear;
+	private int displayMonth = 1;
+	private int pendingFocusDay = -1;
+	private boolean monthInitialized;
 
 	private int lastScreenWidth = -1;
 	private int lastScreenHeight = -1;
@@ -74,13 +85,19 @@ public class SigninScreen extends Screen {
 		closeButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.common.close"), button -> close())
 			.dimensions(0, 0, 62, 18)
 			.build());
+		prevMonthButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.common.prev"), button -> switchMonth(-1))
+			.dimensions(0, 0, 20, 18)
+			.build());
+		nextMonthButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.common.next"), button -> switchMonth(1))
+			.dimensions(0, 0, 20, 18)
+			.build());
 
 		ensureLayout(true);
 		refreshButtons();
 	}
 
 	public void refreshButtons() {
-		if (signButton == null || makeupButton == null || refreshButton == null || editButton == null) {
+		if (signButton == null || makeupButton == null || refreshButton == null || editButton == null || prevMonthButton == null || nextMonthButton == null) {
 			return;
 		}
 
@@ -90,15 +107,19 @@ public class SigninScreen extends Screen {
 			makeupButton.active = false;
 			refreshButton.active = true;
 			editButton.visible = false;
+			prevMonthButton.active = false;
+			nextMonthButton.active = false;
 			return;
 		}
 
 		PlayerSigninRecord record = payload.record();
 		signButton.active = !record.signedToday();
-		makeupButton.active = !record.signedYesterday() && record.makeupCards() > 0;
+		makeupButton.active = payload.canMakeup() && record.makeupCards() > 0;
 		refreshButton.active = true;
 		editButton.visible = payload.op();
 		editButton.active = payload.op();
+		prevMonthButton.active = displayMonth > 1;
+		nextMonthButton.active = displayMonth < 12;
 	}
 
 	@Override
@@ -122,19 +143,15 @@ public class SigninScreen extends Screen {
 		);
 		context.fill(dividerX, panelTop + HEADER_HEIGHT + 30, dividerX + 1, panelTop + panelHeight - 10, 0x6A9E846C);
 
-		context.drawCenteredTextWithShadow(
-			textRenderer,
-			Text.translatable("gui.signin.title").formatted(Formatting.BOLD),
-			width / 2,
-			panelTop + 10,
-			0xFF5A422B
-		);
+		Text titleText = Text.translatable("gui.signin.title").formatted(Formatting.BOLD);
+		context.drawText(textRenderer, titleText, (width - textRenderer.getWidth(titleText)) / 2, panelTop + 10, 0xFF5A422B, false);
 
 		PlayerSyncPayload payload = ClientSigninState.get();
+		syncMonthState(payload);
 		drawStatusChip(context, payload);
 
 		if (payload == null) {
-			context.drawTextWithShadow(textRenderer, Text.translatable("gui.signin.waiting_server"), panelLeft + 14, panelTop + HEADER_HEIGHT + 56, UiTheme.TEXT_MUTED);
+			context.drawText(textRenderer, Text.translatable("gui.signin.waiting_server"), panelLeft + 14, panelTop + HEADER_HEIGHT + 56, UiTheme.TEXT_MUTED, false);
 			refreshButtons();
 			super.render(context, mouseX, mouseY, delta);
 			return;
@@ -142,7 +159,7 @@ public class SigninScreen extends Screen {
 
 		refreshRewardVisualCache(payload.rewards());
 		drawStatus(context, payload, payload.record());
-		drawRewards(context, payload.nextRewardDay(), mouseX, mouseY);
+		drawRewards(context, payload, mouseX, mouseY);
 
 		refreshButtons();
 		super.render(context, mouseX, mouseY, delta);
@@ -164,9 +181,11 @@ public class SigninScreen extends Screen {
 			return super.mouseScrolled(mouseX, mouseY, amount);
 		}
 
+		CalendarDayUtil.MonthRange monthRange = CalendarDayUtil.monthRange(displayYear, displayMonth);
+		int monthRows = Math.max(0, monthRange.endDay() - monthRange.startDay() + 1);
 		int rowHeight = getRewardRowHeight();
 		int visibleRows = Math.max(1, (listEndY - listStartY) / rowHeight);
-		int maxScroll = Math.max(0, rewardVisualCache.size() - visibleRows);
+		int maxScroll = Math.max(0, monthRows - visibleRows);
 		if (maxScroll <= 0) {
 			return super.mouseScrolled(mouseX, mouseY, amount);
 		}
@@ -184,6 +203,31 @@ public class SigninScreen extends Screen {
 	@Override
 	public boolean shouldPause() {
 		return false;
+	}
+
+	private void switchMonth(int delta) {
+		int next = Math.max(1, Math.min(12, displayMonth + delta));
+		if (next == displayMonth) {
+			return;
+		}
+		displayMonth = next;
+		rewardScroll = 0;
+		pendingFocusDay = -1;
+	}
+
+	private void syncMonthState(PlayerSyncPayload payload) {
+		if (payload == null) {
+			monthInitialized = false;
+			return;
+		}
+
+		boolean changedYear = !monthInitialized || displayYear != payload.rewardYear();
+		displayYear = payload.rewardYear();
+		if (changedYear) {
+			displayMonth = CalendarDayUtil.monthFromDayOfYear(displayYear, payload.todayDayOfYear());
+			pendingFocusDay = payload.todayDayOfYear();
+			monthInitialized = true;
+		}
 	}
 
 	private void drawStatus(DrawContext context, PlayerSyncPayload payload, PlayerSigninRecord record) {
@@ -207,54 +251,76 @@ public class SigninScreen extends Screen {
 					: Text.translatable("gui.signin.status.unsigned")
 			);
 
-		context.drawTextWithShadow(textRenderer, todayText, x, y, UiTheme.TEXT_PRIMARY);
-		context.drawTextWithShadow(textRenderer, Text.translatable("gui.signin.status.streak", record.streak()), x, y + 12, UiTheme.TEXT_MUTED);
-		context.drawTextWithShadow(textRenderer, Text.translatable("gui.signin.status.total", record.totalDays()), x, y + 24, UiTheme.TEXT_MUTED);
-		context.drawTextWithShadow(textRenderer, Text.translatable("gui.signin.status.cards", record.makeupCards()), x, y + 36, UiTheme.TEXT_NOTICE);
-		context.drawTextWithShadow(textRenderer, Text.translatable("gui.signin.status.last", lastSignDate), x, y + 48, UiTheme.TEXT_MUTED);
-		context.drawTextWithShadow(textRenderer, Text.translatable("gui.signin.status.next_reward", payload.nextRewardDay()), x, y + 60, 0xFFAA6A36);
+		LocalDate nextRewardDate = LocalDate.ofEpochDay(payload.nextRewardEpochDay());
+		String nextDateLabel = nextRewardDate.getMonthValue() + "." + nextRewardDate.getDayOfMonth();
+		context.drawText(textRenderer, todayText, x, y, UiTheme.TEXT_PRIMARY, false);
+		context.drawText(textRenderer, Text.translatable("gui.signin.status.streak", record.streak()), x, y + 12, UiTheme.TEXT_MUTED, false);
+		context.drawText(textRenderer, Text.translatable("gui.signin.status.total", record.totalDays()), x, y + 24, UiTheme.TEXT_MUTED, false);
+		context.drawText(textRenderer, Text.translatable("gui.signin.status.cards", record.makeupCards()), x, y + 36, UiTheme.TEXT_NOTICE, false);
+		context.drawText(textRenderer, Text.translatable("gui.signin.status.last", lastSignDate), x, y + 48, UiTheme.TEXT_MUTED, false);
+		context.drawText(textRenderer, Text.translatable("gui.signin.status.next_reward_date", nextDateLabel), x, y + 60, 0xFFAA6A36, false);
 	}
 
-	private void drawRewards(DrawContext context, int nextRewardDay, int mouseX, int mouseY) {
+	private void drawRewards(DrawContext context, PlayerSyncPayload payload, int mouseX, int mouseY) {
 		int listX = panelLeft + getLeftSectionWidth() + 14;
 		int listY = panelTop + HEADER_HEIGHT + 34;
 		int listWidth = panelWidth - getLeftSectionWidth() - 28;
 		int listBottom = panelTop + panelHeight - 32;
 		int rowHeight = getRewardRowHeight();
 		int rowInnerHeight = rowHeight - 2;
+
+		CalendarDayUtil.MonthRange monthRange = CalendarDayUtil.monthRange(displayYear, displayMonth);
+		List<RewardVisual> monthRewards = filterMonthRewards(monthRange.startDay(), monthRange.endDay());
+		LocalDate nextRewardDate = LocalDate.ofEpochDay(payload.nextRewardEpochDay());
+		int nextRewardDay = nextRewardDate.getYear() == displayYear ? nextRewardDate.getDayOfYear() : -1;
+
 		int visibleRows = Math.max(1, (listBottom - (listY + 18)) / rowHeight);
-		int maxScroll = Math.max(0, rewardVisualCache.size() - visibleRows);
+		int maxScroll = Math.max(0, monthRewards.size() - visibleRows);
 		if (rewardScroll > maxScroll) {
 			rewardScroll = maxScroll;
 		}
 
-		context.drawTextWithShadow(textRenderer, Text.translatable("gui.signin.reward_preview.title").formatted(Formatting.BOLD), listX, listY, UiTheme.TEXT_PRIMARY);
+		if (pendingFocusDay >= monthRange.startDay() && pendingFocusDay <= monthRange.endDay()) {
+			int targetIndex = pendingFocusDay - monthRange.startDay();
+			rewardScroll = Math.max(0, Math.min(maxScroll, targetIndex - visibleRows / 2));
+		}
+		pendingFocusDay = -1;
+
+		context.drawText(textRenderer, Text.translatable("gui.signin.reward_preview.title_month", displayYear, displayMonth).formatted(Formatting.BOLD), listX, listY, UiTheme.TEXT_PRIMARY, false);
 		if (maxScroll > 0) {
-			context.drawTextWithShadow(
+			int pageX = listX + Math.max(0, listWidth - 150);
+			context.drawText(
 				textRenderer,
 				Text.translatable("gui.common.scroll_page", rewardScroll + 1, maxScroll + 1),
-				listX + listWidth - 66,
-				listY,
-				UiTheme.TEXT_NOTICE
+				pageX,
+				listY + 10,
+				UiTheme.TEXT_NOTICE,
+				false
 			);
 		}
 
 		int start = rewardScroll;
-		int end = Math.min(rewardVisualCache.size(), start + visibleRows);
+		int end = Math.min(monthRewards.size(), start + visibleRows);
+		Set<Integer> signedDays = new HashSet<>(payload.signedDaysOfYear());
+		int todayDay = payload.todayDayOfYear();
 		List<Text> hoverTooltip = null;
 		for (int i = start; i < end; i++) {
-			RewardVisual visual = rewardVisualCache.get(i);
+			RewardVisual visual = monthRewards.get(i);
 			int drawIndex = i - start;
 			int rowTop = listY + 18 + drawIndex * rowHeight;
-			int color = visual.day() == nextRewardDay ? 0x96FFD4A8 : 0x76FFEBD2;
+			int color = resolveRowColor(visual.day(), todayDay, signedDays);
 			UiRender.drawRoundedRect(context, listX, rowTop, listX + listWidth, rowTop + rowInnerHeight, 4, color);
+			if (visual.day() == nextRewardDay) {
+				context.fill(listX, rowTop, listX + 2, rowTop + rowInnerHeight, 0xFFAA6A36);
+			}
 
 			context.drawItem(visual.stack(), listX + 4, rowTop + 1);
 			context.drawItemInSlot(textRenderer, visual.stack(), listX + 4, rowTop + 1);
+			String dayLabel = CalendarDayUtil.monthDayLabel(displayYear, visual.day());
 
 			String line = Text.translatable(
 				"gui.signin.reward_preview.row",
-				visual.day(),
+				dayLabel,
 				visual.xp(),
 				visual.itemText(),
 				visual.makeupCard()
@@ -277,6 +343,16 @@ public class SigninScreen extends Screen {
 		if (hoverTooltip != null && !hoverTooltip.isEmpty()) {
 			context.drawTooltip(textRenderer, hoverTooltip, mouseX, mouseY);
 		}
+	}
+
+	private List<RewardVisual> filterMonthRewards(int startDay, int endDay) {
+		List<RewardVisual> filtered = new ArrayList<>(endDay - startDay + 1);
+		for (RewardVisual visual : rewardVisualCache) {
+			if (visual.day() >= startDay && visual.day() <= endDay) {
+				filtered.add(visual);
+			}
+		}
+		return filtered;
 	}
 
 	private void drawStatusChip(DrawContext context, PlayerSyncPayload payload) {
@@ -326,7 +402,7 @@ public class SigninScreen extends Screen {
 
 	private List<Text> buildRewardTooltipLines(RewardVisual visual, int maxWidth) {
 		List<Text> lines = new ArrayList<>();
-		lines.add(Text.translatable("gui.signin.reward_preview.tooltip_head", visual.day(), visual.xp(), visual.makeupCard()));
+		lines.add(Text.translatable("gui.signin.reward_preview.tooltip_head", CalendarDayUtil.monthDayLabel(displayYear, visual.day()), visual.xp(), visual.makeupCard()));
 		lines.add(Text.translatable("gui.signin.reward_preview.tooltip_items"));
 		if (visual.itemLines().isEmpty()) {
 			lines.add(Text.translatable("gui.signin.reward_preview.tooltip_empty"));
@@ -361,7 +437,7 @@ public class SigninScreen extends Screen {
 		panelWidth = bounds.width();
 		panelHeight = bounds.height();
 
-		if (signButton == null || makeupButton == null || refreshButton == null || editButton == null || closeButton == null) {
+		if (signButton == null || makeupButton == null || refreshButton == null || editButton == null || closeButton == null || prevMonthButton == null || nextMonthButton == null) {
 			return;
 		}
 
@@ -381,17 +457,29 @@ public class SigninScreen extends Screen {
 
 		signButton.setPosition(buttonX, actionStartY);
 		signButton.setWidth(buttonWidth);
-
 		makeupButton.setPosition(buttonX, actionStartY + (buttonHeight + buttonGap));
 		makeupButton.setWidth(buttonWidth);
-
 		refreshButton.setPosition(buttonX, actionStartY + (buttonHeight + buttonGap) * 2);
 		refreshButton.setWidth(buttonWidth);
-
 		editButton.setPosition(buttonX, actionStartY + (buttonHeight + buttonGap) * 3);
 		editButton.setWidth(buttonWidth);
 
 		closeButton.setPosition(panelLeft + panelWidth - 74, panelTop + panelHeight - 24);
+
+		int listX = panelLeft + getLeftSectionWidth() + 14;
+		int listWidth = panelWidth - getLeftSectionWidth() - 28;
+		prevMonthButton.setPosition(listX + listWidth - 56, panelTop + HEADER_HEIGHT + 32);
+		nextMonthButton.setPosition(listX + listWidth - 32, panelTop + HEADER_HEIGHT + 32);
+	}
+
+	private int resolveRowColor(int dayOfYear, int todayDayOfYear, Set<Integer> signedDays) {
+		if (signedDays.contains(dayOfYear)) {
+			return ROW_COLOR_SIGNED;
+		}
+		if (dayOfYear < todayDayOfYear) {
+			return ROW_COLOR_MISSED;
+		}
+		return ROW_COLOR_UNSIGNED;
 	}
 
 	private int getLeftSectionWidth() {
@@ -399,8 +487,8 @@ public class SigninScreen extends Screen {
 		if (suggested < 146) {
 			suggested = 146;
 		}
-		if (suggested > 240) {
-			suggested = 240;
+		if (suggested > 250) {
+			suggested = 250;
 		}
 		return suggested;
 	}

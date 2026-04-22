@@ -6,6 +6,7 @@ import com.mryu.signin.data.PlayerSigninRecord;
 import com.mryu.signin.data.RewardEntry;
 import com.mryu.signin.data.RewardItemEntry;
 import com.mryu.signin.data.SigninResult;
+import com.mryu.signin.service.SigninNoticeEvent;
 import com.mryu.signin.service.SigninService;
 import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
@@ -40,14 +41,24 @@ public final class SigninNetworking {
 		ServerPlayNetworking.registerGlobalReceiver(C2S_SIGN, (server, player, handler, buf, responseSender) ->
 			server.execute(() -> {
 				SigninResult result = SigninService.signToday(server, player);
-				sendSync(player, false, result.message());
+				sendSync(
+					player,
+					false,
+					result.message(),
+					result.success() ? SigninNoticeEvent.SIGN_SUCCESS : SigninNoticeEvent.NONE
+				);
 			})
 		);
 
 		ServerPlayNetworking.registerGlobalReceiver(C2S_MAKEUP_YESTERDAY, (server, player, handler, buf, responseSender) ->
 			server.execute(() -> {
 				SigninResult result = SigninService.makeupYesterday(server, player);
-				sendSync(player, false, result.message());
+				sendSync(
+					player,
+					false,
+					result.message(),
+					result.success() ? SigninNoticeEvent.MAKEUP_SUCCESS : SigninNoticeEvent.NONE
+				);
 			})
 		);
 
@@ -72,10 +83,14 @@ public final class SigninNetworking {
 	}
 
 	public static void sendSync(ServerPlayerEntity player, boolean openScreen, Text notice) {
+		sendSync(player, openScreen, notice, SigninNoticeEvent.NONE);
+	}
+
+	public static void sendSync(ServerPlayerEntity player, boolean openScreen, Text notice, int noticeEvent) {
 		if (player.getServer() == null) {
 			return;
 		}
-		PlayerSyncPayload payload = SigninService.buildSyncPayload(player.getServer(), player, notice);
+		PlayerSyncPayload payload = SigninService.buildSyncPayload(player.getServer(), player, notice, noticeEvent);
 		PacketByteBuf out = PacketByteBufs.create();
 		writeSyncPacket(out, openScreen, payload);
 		ServerPlayNetworking.send(player, S2C_SYNC, out);
@@ -85,6 +100,9 @@ public final class SigninNetworking {
 		buf.writeBoolean(openScreen);
 		buf.writeBoolean(payload.op());
 		buf.writeLong(payload.todayEpochDay());
+		buf.writeInt(payload.rewardYear());
+		buf.writeInt(payload.daysInYear());
+		buf.writeInt(payload.todayDayOfYear());
 
 		buf.writeBoolean(payload.record().signedToday());
 		buf.writeBoolean(payload.record().signedYesterday());
@@ -92,7 +110,15 @@ public final class SigninNetworking {
 		buf.writeInt(payload.record().totalDays());
 		buf.writeInt(payload.record().makeupCards());
 		buf.writeLong(payload.record().lastSignDay());
+		buf.writeLong(payload.nextRewardEpochDay());
 		buf.writeInt(payload.nextRewardDay());
+		buf.writeBoolean(payload.canMakeup());
+		buf.writeLong(payload.makeupTargetEpochDay());
+		buf.writeInt(payload.signedDaysOfYear().size());
+		for (Integer dayOfYear : payload.signedDaysOfYear()) {
+			buf.writeInt(dayOfYear == null ? 0 : dayOfYear);
+		}
+		buf.writeInt(payload.noticeEvent());
 		buf.writeText(payload.notice());
 
 		writeRewards(buf, payload.rewards());
@@ -102,6 +128,9 @@ public final class SigninNetworking {
 		boolean openScreen = buf.readBoolean();
 		boolean op = buf.readBoolean();
 		long todayEpochDay = buf.readLong();
+		int rewardYear = buf.readInt();
+		int daysInYear = buf.readInt();
+		int todayDayOfYear = buf.readInt();
 
 		boolean signedToday = buf.readBoolean();
 		boolean signedYesterday = buf.readBoolean();
@@ -109,7 +138,19 @@ public final class SigninNetworking {
 		int totalDays = buf.readInt();
 		int makeupCards = buf.readInt();
 		long lastSignDay = buf.readLong();
+		long nextRewardEpochDay = buf.readLong();
 		int nextRewardDay = buf.readInt();
+		boolean canMakeup = buf.readBoolean();
+		long makeupTargetEpochDay = buf.readLong();
+		int signedDaysSize = buf.readInt();
+		if (signedDaysSize < 0 || signedDaysSize > SigninLimits.MAX_REWARD_DAYS_PER_YEAR) {
+			throw new IllegalArgumentException("Invalid signed day list size: " + signedDaysSize);
+		}
+		List<Integer> signedDaysOfYear = new ArrayList<>(signedDaysSize);
+		for (int i = 0; i < signedDaysSize; i++) {
+			signedDaysOfYear.add(buf.readInt());
+		}
+		int noticeEvent = buf.readInt();
 		Text notice = buf.readText();
 
 		List<RewardEntry> rewards = readRewards(buf);
@@ -119,6 +160,9 @@ public final class SigninNetworking {
 			new PlayerSyncPayload(
 				op,
 				todayEpochDay,
+				rewardYear,
+				daysInYear,
+				todayDayOfYear,
 				new PlayerSigninRecord(
 					signedToday,
 					signedYesterday,
@@ -127,8 +171,13 @@ public final class SigninNetworking {
 					makeupCards,
 					lastSignDay
 				),
+				nextRewardEpochDay,
 				nextRewardDay,
+				canMakeup,
+				makeupTargetEpochDay,
+				signedDaysOfYear,
 				rewards,
+				noticeEvent,
 				notice
 			)
 		);

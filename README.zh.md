@@ -20,8 +20,8 @@
 
 ## 安装方式
 
-1. 将构建产物 `signin-1.0.1.jar` 放入服务端 `mods`。
-2. 客户端也放入同版本 `signin-1.0.1.jar`（建议与服务端一致）。
+1. 将构建产物 `signin-1.0.2.jar` 放入服务端 `mods`。
+2. 客户端也放入同版本 `signin-1.0.2.jar`（建议与服务端一致）。
 3. 确保同时安装 Fabric Loader 与 Fabric API。
 
 ## 指令说明

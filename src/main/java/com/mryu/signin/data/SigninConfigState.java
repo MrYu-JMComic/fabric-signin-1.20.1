@@ -1,31 +1,45 @@
 package com.mryu.signin.data;
 
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import com.mryu.signin.Signin;
 import com.mryu.signin.config.SigninLimits;
-import net.minecraft.nbt.NbtCompound;
-import net.minecraft.nbt.NbtElement;
-import net.minecraft.nbt.NbtList;
+import com.mryu.signin.service.RewardValidationService;
+import com.mryu.signin.util.CalendarDayUtil;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.world.PersistentState;
-import net.minecraft.world.PersistentStateManager;
 
+import java.io.IOException;
+import java.io.Reader;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.WeakHashMap;
 
-public class SigninConfigState extends PersistentState {
-	private static final String SAVE_KEY = "signin_config";
-	private static final String REWARDS_KEY = "rewards";
-	private static final String ITEMS_KEY = "items";
+public final class SigninConfigState {
+	private static final String CONFIG_DIR = "signin";
+	private static final String FILE_PREFIX = "rewards-";
+	private static final String FILE_SUFFIX = ".json";
+	private static final int SCHEMA_VERSION = 1;
 
-	private static final String DAY_KEY = "day";
-	private static final String XP_KEY = "xp";
-	private static final String ITEM_ID_KEY = "itemId";
-	private static final String ITEM_COUNT_KEY = "itemCount";
-	private static final String ITEM_DATA_KEY = "itemData";
-	private static final String CARD_REWARD_KEY = "cardReward";
+	private static final Gson GSON = new GsonBuilder()
+		.setPrettyPrinting()
+		.disableHtmlEscaping()
+		.create();
+
+	private static final Map<MinecraftServer, SigninConfigState> INSTANCES =
+		Collections.synchronizedMap(new WeakHashMap<>());
 
 	public static final int REWARD_CYCLE_DAYS = SigninLimits.REWARD_CYCLE_DAYS;
-	private static final List<RewardEntry> DEFAULT_REWARDS = List.of(
+	private static final List<RewardEntry> BASE_DEFAULT_REWARDS = List.of(
 		new RewardEntry(1, 20, List.of(), 0),
 		new RewardEntry(2, 30, List.of(), 0),
 		new RewardEntry(3, 40, List.of(new RewardItemEntry("minecraft:bread", 3, "")), 0),
@@ -35,193 +49,217 @@ public class SigninConfigState extends PersistentState {
 		new RewardEntry(7, 120, List.of(new RewardItemEntry("minecraft:emerald", 4, "")), 1)
 	);
 
-	private final List<RewardEntry> rewards = new ArrayList<>();
-	private final RewardEntry[] rewardsByDay = new RewardEntry[REWARD_CYCLE_DAYS];
-	private List<RewardEntry> rewardSnapshot = List.of();
-	private boolean cacheDirty = true;
+	private final Path configDirectory;
+	private final Map<Integer, YearRewardData> yearCache = new HashMap<>();
 
-	public SigninConfigState() {
-		rewards.addAll(DEFAULT_REWARDS);
+	private SigninConfigState() {
+		this.configDirectory = FabricLoader.getInstance().getConfigDir().resolve(CONFIG_DIR);
 	}
 
 	public static SigninConfigState get(MinecraftServer server) {
-		PersistentStateManager stateManager = server.getOverworld().getPersistentStateManager();
-		return stateManager.getOrCreate(SigninConfigState::fromNbt, SigninConfigState::new, SAVE_KEY);
+		synchronized (INSTANCES) {
+			return INSTANCES.computeIfAbsent(server, key -> new SigninConfigState());
+		}
 	}
 
-	public static SigninConfigState fromNbt(NbtCompound nbt) {
-		SigninConfigState state = new SigninConfigState();
-		state.rewards.clear();
+	public synchronized RewardEntry getRewardForDate(LocalDate date) {
+		YearRewardData data = getOrLoadYearData(date.getYear());
+		return data.rewardForDay(date.getDayOfYear());
+	}
 
-		NbtList rewardList = nbt.getList(REWARDS_KEY, NbtElement.COMPOUND_TYPE);
-		for (int i = 0; i < rewardList.size(); i++) {
-			NbtCompound rewardNbt = rewardList.getCompound(i);
-			List<RewardItemEntry> items = readItemList(rewardNbt);
-			RewardEntry reward = new RewardEntry(
-				rewardNbt.getInt(DAY_KEY),
-				rewardNbt.getInt(XP_KEY),
-				items,
-				rewardNbt.getInt(CARD_REWARD_KEY)
-			).normalized();
-			state.rewards.add(reward);
+	public synchronized YearRewardsSnapshot getSnapshotForDate(LocalDate date) {
+		YearRewardData data = getOrLoadYearData(date.getYear());
+		return data.snapshot();
+	}
+
+	public synchronized List<RewardEntry> getRewardsForYear(int year) {
+		return getOrLoadYearData(year).snapshot().rewards();
+	}
+
+	public synchronized boolean updateRewardsForYear(int year, List<RewardEntry> updatedRewards) {
+		int expectedDays = CalendarDayUtil.daysInYear(year);
+		List<RewardEntry> normalized = RewardValidationService.normalizeAndValidate(updatedRewards, expectedDays);
+		if (normalized == null) {
+			return false;
 		}
 
-		state.ensureDefaults();
-		state.refreshRewardCache();
-		return state;
+		YearRewardData data = getOrLoadYearData(year);
+		data.setRewards(normalized);
+		writeYearFile(data);
+		return true;
 	}
 
-	@Override
-	public synchronized NbtCompound writeNbt(NbtCompound nbt) {
-		ensureDefaults();
-		refreshRewardCache();
-
-		NbtList rewardList = new NbtList();
-		for (RewardEntry reward : rewardSnapshot) {
-			NbtCompound rewardNbt = new NbtCompound();
-			rewardNbt.putInt(DAY_KEY, reward.day());
-			rewardNbt.putInt(XP_KEY, reward.xp());
-			rewardNbt.putInt(CARD_REWARD_KEY, reward.makeupCardReward());
-			rewardNbt.put(ITEMS_KEY, writeItemList(reward.items()));
-			rewardList.add(rewardNbt);
-		}
-		nbt.put(REWARDS_KEY, rewardList);
-		return nbt;
-	}
-
-	public synchronized RewardEntry getRewardForStreak(int streak) {
-		ensureDefaults();
-		refreshRewardCache();
-		int day = ((Math.max(1, streak) - 1) % REWARD_CYCLE_DAYS) + 1;
-		return rewardsByDay[day - 1];
-	}
-
-	public synchronized List<RewardEntry> getRewards() {
-		ensureDefaults();
-		refreshRewardCache();
-		return rewardSnapshot;
-	}
-
-	public synchronized void updateRewards(List<RewardEntry> updatedRewards) {
-		rewards.clear();
-		if (updatedRewards != null) {
-			for (RewardEntry reward : updatedRewards) {
-				if (reward != null) {
-					rewards.add(reward.normalized());
-				}
-			}
-		}
-		cacheDirty = true;
-		ensureDefaults();
-		refreshRewardCache();
-		markDirty();
+	public static List<RewardEntry> defaultRewardsForYear(int year) {
+		return buildDefaultRewards(year);
 	}
 
 	public static List<RewardEntry> defaultRewards() {
-		return DEFAULT_REWARDS;
+		return List.copyOf(BASE_DEFAULT_REWARDS);
 	}
 
-	private void ensureDefaults() {
-		if (rewards.size() == REWARD_CYCLE_DAYS) {
-			boolean changed = false;
-			List<RewardEntry> sorted = new ArrayList<>(rewards);
-			sorted.sort(Comparator.comparingInt(RewardEntry::day));
-			if (!sorted.equals(rewards)) {
-				rewards.clear();
-				rewards.addAll(sorted);
-				changed = true;
-			}
+	private YearRewardData getOrLoadYearData(int year) {
+		YearRewardData cached = yearCache.get(year);
+		if (cached != null) {
+			return cached;
+		}
 
-			for (int i = 0; i < rewards.size(); i++) {
-				RewardEntry normalized = rewards.get(i).normalized();
-				RewardEntry canonical = normalized.day() == i + 1
-					? normalized
-					: new RewardEntry(i + 1, normalized.xp(), normalized.items(), normalized.makeupCardReward());
-				if (!canonical.equals(rewards.get(i))) {
-					rewards.set(i, canonical);
-					changed = true;
+		YearRewardData loaded = loadYearData(year);
+		yearCache.put(year, loaded);
+		return loaded;
+	}
+
+	private YearRewardData loadYearData(int year) {
+		Path filePath = configDirectory.resolve(FILE_PREFIX + year + FILE_SUFFIX);
+		List<RewardEntry> rewards = readRewardsFromFile(filePath);
+		List<RewardEntry> normalized = normalizeLooseRewards(rewards, year);
+
+		YearRewardData data = new YearRewardData(year, filePath);
+		data.setRewards(normalized);
+		if (rewards == null || !normalized.equals(rewards)) {
+			writeYearFile(data);
+		}
+		return data;
+	}
+
+	private List<RewardEntry> readRewardsFromFile(Path path) {
+		if (!Files.exists(path)) {
+			return null;
+		}
+		try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+			RewardConfigFile file = GSON.fromJson(reader, RewardConfigFile.class);
+			if (file == null || file.rewards == null) {
+				return null;
+			}
+			return file.rewards;
+		} catch (Exception exception) {
+			Signin.LOGGER.warn("Failed to load sign-in reward file {}. Defaults will be used.", path, exception);
+			return null;
+		}
+	}
+
+	private void writeYearFile(YearRewardData data) {
+		try {
+			Files.createDirectories(configDirectory);
+			RewardConfigFile file = new RewardConfigFile();
+			file.schemaVersion = SCHEMA_VERSION;
+			file.year = data.year();
+			file.daysInYear = data.daysInYear();
+			file.rewards = data.snapshot().rewards();
+			try (Writer writer = Files.newBufferedWriter(
+				data.filePath(),
+				StandardCharsets.UTF_8,
+				StandardOpenOption.CREATE,
+				StandardOpenOption.TRUNCATE_EXISTING,
+				StandardOpenOption.WRITE
+			)) {
+				GSON.toJson(file, writer);
+			}
+		} catch (IOException exception) {
+			Signin.LOGGER.error("Failed to save sign-in reward file {}", data.filePath(), exception);
+		}
+	}
+
+	private static List<RewardEntry> normalizeLooseRewards(List<RewardEntry> input, int year) {
+		int daysInYear = CalendarDayUtil.daysInYear(year);
+		RewardEntry[] rewardsByDay = new RewardEntry[daysInYear];
+		for (int day = 1; day <= daysInYear; day++) {
+			rewardsByDay[day - 1] = defaultRewardForDay(day);
+		}
+
+		if (input != null) {
+			for (RewardEntry reward : input) {
+				if (reward == null) {
+					continue;
 				}
-			}
-
-			if (changed) {
-				cacheDirty = true;
-			}
-			if (changed) {
-				markDirty();
-			}
-			return;
-		}
-
-		rewards.clear();
-		rewards.addAll(DEFAULT_REWARDS);
-		cacheDirty = true;
-		markDirty();
-	}
-
-	private void refreshRewardCache() {
-		if (!cacheDirty) {
-			return;
-		}
-
-		List<RewardEntry> ordered = new ArrayList<>(REWARD_CYCLE_DAYS);
-		for (int i = 0; i < REWARD_CYCLE_DAYS; i++) {
-			RewardEntry source = i < rewards.size() ? rewards.get(i).normalized() : DEFAULT_REWARDS.get(i);
-			RewardEntry reward = source.day() == i + 1
-				? source
-				: new RewardEntry(i + 1, source.xp(), source.items(), source.makeupCardReward());
-			rewardsByDay[i] = reward;
-			ordered.add(reward);
-		}
-
-		if (!rewards.equals(ordered)) {
-			rewards.clear();
-			rewards.addAll(ordered);
-			markDirty();
-		}
-
-		rewardSnapshot = List.copyOf(ordered);
-		cacheDirty = false;
-	}
-
-	private static List<RewardItemEntry> readItemList(NbtCompound rewardNbt) {
-		List<RewardItemEntry> items = new ArrayList<>();
-
-		if (rewardNbt.contains(ITEMS_KEY, NbtElement.LIST_TYPE)) {
-			NbtList itemList = rewardNbt.getList(ITEMS_KEY, NbtElement.COMPOUND_TYPE);
-			for (int j = 0; j < itemList.size(); j++) {
-				NbtCompound itemNbt = itemList.getCompound(j);
-				RewardItemEntry entry = new RewardItemEntry(
-					itemNbt.getString(ITEM_ID_KEY),
-					itemNbt.getInt(ITEM_COUNT_KEY),
-					itemNbt.contains(ITEM_DATA_KEY, NbtElement.STRING_TYPE) ? itemNbt.getString(ITEM_DATA_KEY) : ""
-				).normalized();
-				if (!entry.itemId().isBlank() && entry.itemCount() > 0) {
-					items.add(entry);
+				RewardEntry normalized = reward.normalized();
+				int day = normalized.day();
+				if (day < 1 || day > daysInYear) {
+					continue;
 				}
+				rewardsByDay[day - 1] = new RewardEntry(day, normalized.xp(), normalized.items(), normalized.makeupCardReward());
 			}
-			return items;
 		}
 
-		// Backward compatibility with single-item schema.
-		String legacyItemId = rewardNbt.getString(ITEM_ID_KEY);
-		int legacyItemCount = rewardNbt.getInt(ITEM_COUNT_KEY);
-		String legacyItemData = rewardNbt.contains(ITEM_DATA_KEY, NbtElement.STRING_TYPE) ? rewardNbt.getString(ITEM_DATA_KEY) : "";
-		RewardItemEntry legacy = new RewardItemEntry(legacyItemId, legacyItemCount, legacyItemData).normalized();
-		if (!legacy.itemId().isBlank() && legacy.itemCount() > 0) {
-			items.add(legacy);
-		}
-		return items;
+		List<RewardEntry> result = new ArrayList<>(daysInYear);
+		Collections.addAll(result, rewardsByDay);
+		return List.copyOf(result);
 	}
 
-	private static NbtList writeItemList(List<RewardItemEntry> items) {
-		NbtList itemList = new NbtList();
-		for (RewardItemEntry item : items) {
-			NbtCompound itemNbt = new NbtCompound();
-			itemNbt.putString(ITEM_ID_KEY, item.itemId());
-			itemNbt.putInt(ITEM_COUNT_KEY, item.itemCount());
-			itemNbt.putString(ITEM_DATA_KEY, item.itemData());
-			itemList.add(itemNbt);
+	private static List<RewardEntry> buildDefaultRewards(int year) {
+		int daysInYear = CalendarDayUtil.daysInYear(year);
+		List<RewardEntry> rewards = new ArrayList<>(daysInYear);
+		for (int day = 1; day <= daysInYear; day++) {
+			rewards.add(defaultRewardForDay(day));
 		}
-		return itemList;
+		return List.copyOf(rewards);
+	}
+
+	private static RewardEntry defaultRewardForDay(int day) {
+		RewardEntry base = BASE_DEFAULT_REWARDS.get((day - 1) % BASE_DEFAULT_REWARDS.size());
+		return new RewardEntry(day, base.xp(), base.items(), base.makeupCardReward());
+	}
+
+	public record YearRewardsSnapshot(int year, int daysInYear, List<RewardEntry> rewards) {
+		public YearRewardsSnapshot {
+			rewards = List.copyOf(rewards);
+		}
+	}
+
+	private static final class YearRewardData {
+		private final int year;
+		private final int daysInYear;
+		private final Path filePath;
+		private List<RewardEntry> rewards = List.of();
+		private RewardEntry[] rewardsByDay = new RewardEntry[0];
+		private YearRewardsSnapshot snapshot = new YearRewardsSnapshot(1970, 365, List.of());
+
+		private YearRewardData(int year, Path filePath) {
+			this.year = year;
+			this.daysInYear = CalendarDayUtil.daysInYear(year);
+			this.filePath = filePath;
+		}
+
+		private int year() {
+			return year;
+		}
+
+		private int daysInYear() {
+			return daysInYear;
+		}
+
+		private Path filePath() {
+			return filePath;
+		}
+
+		private YearRewardsSnapshot snapshot() {
+			return snapshot;
+		}
+
+		private RewardEntry rewardForDay(int dayOfYear) {
+			int safeDay = CalendarDayUtil.clampDayOfYear(year, dayOfYear);
+			return rewardsByDay[safeDay - 1];
+		}
+
+		private void setRewards(List<RewardEntry> normalizedRewards) {
+			this.rewards = List.copyOf(normalizedRewards);
+			this.rewardsByDay = new RewardEntry[daysInYear];
+			for (int i = 0; i < daysInYear; i++) {
+				RewardEntry source = i < rewards.size() ? rewards.get(i).normalized() : defaultRewardForDay(i + 1);
+				RewardEntry canonical = source.day() == i + 1
+					? source
+					: new RewardEntry(i + 1, source.xp(), source.items(), source.makeupCardReward());
+				this.rewardsByDay[i] = canonical;
+			}
+			List<RewardEntry> ordered = new ArrayList<>(daysInYear);
+			Collections.addAll(ordered, this.rewardsByDay);
+			this.snapshot = new YearRewardsSnapshot(year, daysInYear, ordered);
+		}
+	}
+
+	private static final class RewardConfigFile {
+		private int schemaVersion = SCHEMA_VERSION;
+		private int year;
+		private int daysInYear;
+		private List<RewardEntry> rewards = List.of();
 	}
 }

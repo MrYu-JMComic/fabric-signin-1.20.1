@@ -20,8 +20,8 @@
 
 ## Installation
 
-1. Put `signin-1.0.1.jar` into server `mods`.
-2. Put the same `signin-1.0.1.jar` into client `mods` (recommended).
+1. Put `signin-1.0.2.jar` into server `mods`.
+2. Put the same `signin-1.0.2.jar` into client `mods` (recommended).
 3. Ensure Fabric Loader and Fabric API are installed.
 
 ## Commands

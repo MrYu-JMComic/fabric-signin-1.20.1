@@ -16,8 +16,11 @@ public final class RewardValidationService {
 	private RewardValidationService() {
 	}
 
-	public static List<RewardEntry> normalizeAndValidate(List<RewardEntry> rewards) {
-		if (rewards == null || rewards.size() != SigninLimits.REWARD_CYCLE_DAYS) {
+	public static List<RewardEntry> normalizeAndValidate(List<RewardEntry> rewards, int expectedDays) {
+		if (expectedDays < 1 || expectedDays > SigninLimits.MAX_REWARD_DAYS_PER_YEAR) {
+			return null;
+		}
+		if (rewards == null || rewards.size() != expectedDays) {
 			return null;
 		}
 
@@ -30,7 +33,7 @@ public final class RewardValidationService {
 			}
 
 			RewardEntry fixed = reward.normalized();
-			if (fixed.day() < 1 || fixed.day() > SigninLimits.REWARD_CYCLE_DAYS) {
+			if (fixed.day() < 1 || fixed.day() > expectedDays) {
 				return null;
 			}
 			if (!daySet.add(fixed.day())) {

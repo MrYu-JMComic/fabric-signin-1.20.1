@@ -10,9 +10,11 @@ import net.minecraft.world.PersistentStateManager;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 public class SigninPersistentState extends PersistentState {
 	private static final String SAVE_KEY = "signin_data";
@@ -136,6 +138,29 @@ public class SigninPersistentState extends PersistentState {
 
 	public synchronized long getLastSignedDay(UUID uuid) {
 		return getRecord(uuid).lastSignedDay();
+	}
+
+	public synchronized long findLatestUnsignedDayInRange(UUID uuid, long startInclusive, long endInclusive) {
+		if (endInclusive < startInclusive) {
+			return -1L;
+		}
+		Set<Long> signedDays = getRecord(uuid).signedDays;
+		for (long day = endInclusive; day >= startInclusive; day--) {
+			if (!signedDays.contains(day)) {
+				return day;
+			}
+		}
+		return -1L;
+	}
+
+	public synchronized List<Long> getSignedDaysInRange(UUID uuid, long startInclusive, long endInclusive) {
+		if (endInclusive < startInclusive) {
+			return List.of();
+		}
+		return getRecord(uuid).signedDays.stream()
+			.filter(day -> day >= startInclusive && day <= endInclusive)
+			.sorted()
+			.collect(Collectors.toList());
 	}
 
 	public synchronized PlayerSigninRecord getRecordSnapshot(UUID uuid, long todayEpochDay) {

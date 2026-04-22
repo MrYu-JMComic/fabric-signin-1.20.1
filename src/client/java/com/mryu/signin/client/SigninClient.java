@@ -7,9 +7,13 @@ import com.mryu.signin.client.input.SigninKeyBindings;
 import com.mryu.signin.client.network.SigninClientActions;
 import com.mryu.signin.client.state.ClientSigninState;
 import com.mryu.signin.network.SigninNetworking;
+import com.mryu.signin.service.SigninNoticeEvent;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.sound.PositionedSoundInstance;
+import net.minecraft.sound.SoundEvents;
 
 public class SigninClient implements ClientModInitializer {
 	@Override
@@ -32,6 +36,7 @@ public class SigninClient implements ClientModInitializer {
 			}
 			client.execute(() -> {
 				ClientSigninState.update(packet.payload());
+				playNoticeSound(client, packet.payload().noticeEvent());
 
 				if (packet.openScreen()) {
 					client.setScreen(new SigninScreen());
@@ -42,5 +47,21 @@ public class SigninClient implements ClientModInitializer {
 				}
 			});
 		});
+	}
+
+	private static void playNoticeSound(MinecraftClient client, int noticeEvent) {
+		if (client == null || client.getSoundManager() == null) {
+			return;
+		}
+		switch (noticeEvent) {
+			case SigninNoticeEvent.SIGN_SUCCESS -> client.getSoundManager().play(
+				PositionedSoundInstance.master(SoundEvents.ENTITY_EXPERIENCE_ORB_PICKUP, 0.95F, 1.08F)
+			);
+			case SigninNoticeEvent.MAKEUP_SUCCESS -> client.getSoundManager().play(
+				PositionedSoundInstance.master(SoundEvents.BLOCK_AMETHYST_BLOCK_CHIME, 0.95F, 1.03F)
+			);
+			default -> {
+			}
+		}
 	}
 }

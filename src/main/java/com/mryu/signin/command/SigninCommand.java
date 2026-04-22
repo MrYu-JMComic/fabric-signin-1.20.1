@@ -6,6 +6,7 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mryu.signin.data.SigninResult;
 import com.mryu.signin.network.PlayerSyncPayload;
 import com.mryu.signin.network.SigninNetworking;
+import com.mryu.signin.service.SigninNoticeEvent;
 import com.mryu.signin.service.SigninService;
 import net.minecraft.command.argument.EntityArgumentType;
 import net.minecraft.server.command.CommandManager;
@@ -69,7 +70,12 @@ public final class SigninCommand {
 		ServerPlayerEntity player = source.getPlayerOrThrow();
 		SigninResult result = SigninService.signToday(source.getServer(), player);
 		player.sendMessage(result.message().copy().formatted(result.success() ? Formatting.GREEN : Formatting.YELLOW), false);
-		SigninNetworking.sendSync(player, false, result.message());
+		SigninNetworking.sendSync(
+			player,
+			false,
+			result.message(),
+			result.success() ? SigninNoticeEvent.SIGN_SUCCESS : SigninNoticeEvent.NONE
+		);
 		return 1;
 	}
 
@@ -90,7 +96,12 @@ public final class SigninCommand {
 		ServerPlayerEntity player = source.getPlayerOrThrow();
 		SigninResult result = SigninService.makeupYesterday(source.getServer(), player);
 		player.sendMessage(result.message().copy().formatted(result.success() ? Formatting.GREEN : Formatting.RED), false);
-		SigninNetworking.sendSync(player, false, result.message());
+		SigninNetworking.sendSync(
+			player,
+			false,
+			result.message(),
+			result.success() ? SigninNoticeEvent.MAKEUP_SUCCESS : SigninNoticeEvent.NONE
+		);
 		return 1;
 	}
 

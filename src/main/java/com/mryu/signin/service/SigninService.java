@@ -9,6 +9,7 @@ import com.mryu.signin.data.SigninConfigState;
 import com.mryu.signin.data.SigninPersistentState;
 import com.mryu.signin.data.SigninResult;
 import com.mryu.signin.network.PlayerSyncPayload;
+import com.mryu.signin.util.CalendarDayUtil;
 import com.mryu.signin.util.RewardItemDataUtil;
 import com.mryu.signin.util.RewardItemResolver;
 import net.minecraft.item.Item;
@@ -20,22 +21,27 @@ import net.minecraft.text.MutableText;
 import net.minecraft.text.Text;
 
 import java.time.LocalDate;
-import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public final class SigninService {
-	public static final int MAX_MAKEUP_DAYS = 30;
 
 	private SigninService() {
 	}
 
 	public static long todayEpochDay() {
-		return LocalDate.now(ZoneId.systemDefault()).toEpochDay();
+		return todayDate().toEpochDay();
+	}
+
+	public static LocalDate todayDate() {
+		return CalendarDayUtil.today();
 	}
 
 	public static SigninResult signToday(MinecraftServer server, ServerPlayerEntity player) {
-		long today = todayEpochDay();
+		LocalDate todayDate = todayDate();
+		long today = todayDate.toEpochDay();
 		SigninPersistentState dataState = SigninPersistentState.get(server);
 		SigninConfigState configState = SigninConfigState.get(server);
 
@@ -44,8 +50,7 @@ public final class SigninService {
 		}
 
 		dataState.addSignedDay(player.getUuid(), today);
-		int streak = dataState.calculateStreak(player.getUuid(), today);
-		RewardEntry reward = configState.getRewardForStreak(streak);
+		RewardEntry reward = configState.getRewardForDate(todayDate);
 		giveReward(player, dataState, reward);
 
 		Text message = buildRewardMessage("message.signin.sign_success", snapshot(dataState, player, today), reward);
@@ -53,24 +58,22 @@ public final class SigninService {
 	}
 
 	public static SigninResult makeupYesterday(MinecraftServer server, ServerPlayerEntity player) {
-		long today = todayEpochDay();
-		long targetDay = today - 1L;
+		LocalDate todayDate = todayDate();
+		long today = todayDate.toEpochDay();
 		SigninPersistentState dataState = SigninPersistentState.get(server);
 		SigninConfigState configState = SigninConfigState.get(server);
 
-		if (targetDay < 0L || today - targetDay > MAX_MAKEUP_DAYS) {
-			return result(false, Text.translatable("message.signin.makeup_out_of_range"), dataState, player, today, null);
-		}
-		if (dataState.hasSigned(player.getUuid(), targetDay)) {
+		long targetDay = findLatestMakeupTargetEpochDay(dataState, player, todayDate);
+		if (targetDay < 0L) {
 			return result(false, Text.translatable("message.signin.makeup_not_needed"), dataState, player, today, null);
 		}
 		if (!dataState.consumeMakeupCard(player.getUuid())) {
 			return result(false, Text.translatable("message.signin.makeup_no_card"), dataState, player, today, null);
 		}
 
+		LocalDate targetDate = LocalDate.ofEpochDay(targetDay);
 		dataState.addSignedDay(player.getUuid(), targetDay);
-		int streakAtTarget = dataState.calculateStreak(player.getUuid(), targetDay);
-		RewardEntry reward = configState.getRewardForStreak(streakAtTarget);
+		RewardEntry reward = configState.getRewardForDate(targetDate);
 		giveReward(player, dataState, reward);
 
 		Text message = buildRewardMessage("message.signin.makeup_success", snapshot(dataState, player, today), reward);
@@ -78,37 +81,59 @@ public final class SigninService {
 	}
 
 	public static PlayerSyncPayload buildSyncPayload(MinecraftServer server, ServerPlayerEntity player, Text notice) {
-		long today = todayEpochDay();
+		return buildSyncPayload(server, player, notice, SigninNoticeEvent.NONE);
+	}
+
+	public static PlayerSyncPayload buildSyncPayload(MinecraftServer server, ServerPlayerEntity player, Text notice, int noticeEvent) {
+		LocalDate todayDate = todayDate();
+		long today = todayDate.toEpochDay();
 		SigninPersistentState dataState = SigninPersistentState.get(server);
 		SigninConfigState configState = SigninConfigState.get(server);
+		SigninConfigState.YearRewardsSnapshot rewardSnapshot = configState.getSnapshotForDate(todayDate);
 		PlayerSigninRecord record = snapshot(dataState, player, today);
-		int nextStreak = record.signedToday() ? record.streak() : record.streak() + 1;
-		int nextRewardDay = ((Math.max(1, nextStreak) - 1) % SigninConfigState.REWARD_CYCLE_DAYS) + 1;
+		int todayDayOfYear = todayDate.getDayOfYear();
+		long nextRewardEpochDay = record.signedToday() ? today + 1L : today;
+		LocalDate nextRewardDate = LocalDate.ofEpochDay(nextRewardEpochDay);
+		int nextRewardDay = nextRewardDate.getDayOfYear();
+		long yearStartEpochDay = LocalDate.of(todayDate.getYear(), 1, 1).toEpochDay();
+		long yearEndEpochDay = LocalDate.of(todayDate.getYear(), 12, 31).toEpochDay();
+		long makeupTargetEpochDay = findLatestMakeupTargetEpochDay(dataState, player, todayDate);
+		boolean canMakeup = makeupTargetEpochDay >= 0L;
+		List<Integer> signedDaysOfYear = toDayOfYearList(dataState.getSignedDaysInRange(player.getUuid(), yearStartEpochDay, yearEndEpochDay), yearStartEpochDay);
 
 		return new PlayerSyncPayload(
 			SigninPermissions.canManageRewards(player),
 			today,
+			rewardSnapshot.year(),
+			rewardSnapshot.daysInYear(),
+			todayDayOfYear,
 			record,
+			nextRewardEpochDay,
 			nextRewardDay,
-			configState.getRewards(),
+			canMakeup,
+			makeupTargetEpochDay,
+			signedDaysOfYear,
+			rewardSnapshot.rewards(),
+			noticeEvent,
 			notice == null ? Text.empty() : notice
 		);
 	}
 
 	public static SigninResult saveRewards(MinecraftServer server, ServerPlayerEntity player, List<RewardEntry> rewards) {
-		long today = todayEpochDay();
+		LocalDate todayDate = todayDate();
+		long today = todayDate.toEpochDay();
 		SigninPersistentState dataState = SigninPersistentState.get(server);
 
 		if (!SigninPermissions.canManageRewards(player)) {
 			return result(false, Text.translatable("message.signin.no_admin_permission"), dataState, player, today, null);
 		}
 
-		List<RewardEntry> normalized = RewardValidationService.normalizeAndValidate(rewards);
-		if (normalized == null) {
+		int rewardYear = todayDate.getYear();
+		boolean updated = SigninConfigState.get(server).updateRewardsForYear(rewardYear, rewards);
+		if (!updated) {
 			return result(false, Text.translatable("message.signin.invalid_rewards"), dataState, player, today, null);
 		}
 
-		SigninConfigState.get(server).updateRewards(normalized);
 		return result(true, Text.translatable("message.signin.save_rewards_ok"), dataState, player, today, null);
 	}
 
@@ -230,5 +255,33 @@ public final class SigninService {
 
 	private static PlayerSigninRecord snapshot(SigninPersistentState dataState, ServerPlayerEntity player, long today) {
 		return dataState.getRecordSnapshot(player.getUuid(), today);
+	}
+
+	private static long findLatestMakeupTargetEpochDay(SigninPersistentState dataState, ServerPlayerEntity player, LocalDate todayDate) {
+		long todayEpochDay = todayDate.toEpochDay();
+		long startEpochDay = LocalDate.of(todayDate.getYear(), 1, 1).toEpochDay();
+		long endEpochDay = todayEpochDay - 1L;
+		if (endEpochDay < startEpochDay) {
+			return -1L;
+		}
+		return dataState.findLatestUnsignedDayInRange(player.getUuid(), startEpochDay, endEpochDay);
+	}
+
+	private static List<Integer> toDayOfYearList(List<Long> epochDays, long yearStartEpochDay) {
+		if (epochDays == null || epochDays.isEmpty()) {
+			return List.of();
+		}
+		List<Integer> result = new ArrayList<>(epochDays.size());
+		Set<Integer> dedupe = new HashSet<>();
+		for (long epochDay : epochDays) {
+			int dayOfYear = (int) (epochDay - yearStartEpochDay) + 1;
+			if (dayOfYear < 1) {
+				continue;
+			}
+			if (dedupe.add(dayOfYear)) {
+				result.add(dayOfYear);
+			}
+		}
+		return result;
 	}
 }
