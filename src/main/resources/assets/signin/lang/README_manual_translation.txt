@@ -8,7 +8,7 @@ Manual localization format for this mod:
 2. Keep keys unchanged. Only modify values.
 
 3. Placeholder rules:
-   - `%s` means dynamic parameter (number/text/component).
+   - `%s` means dynamic parameter (number/text).
    - Do not delete or reorder `%s` unless you also update code.
    - Use `%%` if you need a literal percent character.
 

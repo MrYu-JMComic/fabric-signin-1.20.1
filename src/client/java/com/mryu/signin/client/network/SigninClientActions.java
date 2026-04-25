@@ -21,8 +21,8 @@ public final class SigninClientActions {
 		sendEmptyIfAvailable(SigninNetworking.C2S_SIGN);
 	}
 
-	public static void makeupYesterday() {
-		sendEmptyIfAvailable(SigninNetworking.C2S_MAKEUP_YESTERDAY);
+	public static void makeupLatestMissedDay() {
+		sendEmptyIfAvailable(SigninNetworking.C2S_MAKEUP_LATEST_MISSED);
 	}
 
 	public static void saveRewards(List<RewardEntry> rewards) {

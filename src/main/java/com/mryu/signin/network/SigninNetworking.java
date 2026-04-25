@@ -26,7 +26,7 @@ public final class SigninNetworking {
 
 	public static final Identifier C2S_REQUEST_SYNC = id("request_sync");
 	public static final Identifier C2S_SIGN = id("sign_today");
-	public static final Identifier C2S_MAKEUP_YESTERDAY = id("makeup_yesterday");
+	public static final Identifier C2S_MAKEUP_LATEST_MISSED = id("makeup_latest_missed");
 	public static final Identifier C2S_SAVE_REWARDS = id("save_rewards");
 	public static final Identifier S2C_SYNC = id("sync");
 
@@ -50,9 +50,9 @@ public final class SigninNetworking {
 			})
 		);
 
-		ServerPlayNetworking.registerGlobalReceiver(C2S_MAKEUP_YESTERDAY, (server, player, handler, buf, responseSender) ->
+		ServerPlayNetworking.registerGlobalReceiver(C2S_MAKEUP_LATEST_MISSED, (server, player, handler, buf, responseSender) ->
 			server.execute(() -> {
-				SigninResult result = SigninService.makeupYesterday(server, player);
+				SigninResult result = SigninService.makeupLatestMissedDay(server, player);
 				sendSync(
 					player,
 					false,

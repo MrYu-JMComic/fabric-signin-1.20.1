@@ -170,9 +170,6 @@ public final class RewardDisplayUtil {
 		if (kind == RewardItemDataUtil.ItemDataKind.SNBT) {
 			return base + " " + I18n.translate("text.signin.tag_nbt");
 		}
-		if (kind == RewardItemDataUtil.ItemDataKind.COMPONENT_TEXT) {
-			return base + " " + I18n.translate("text.signin.tag_component");
-		}
 		return base;
 	}
 

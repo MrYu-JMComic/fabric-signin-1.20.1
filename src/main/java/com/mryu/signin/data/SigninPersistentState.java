@@ -1,5 +1,6 @@
 package com.mryu.signin.data;
 
+import com.mryu.signin.config.SigninLimits;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.NbtElement;
 import net.minecraft.nbt.NbtList;
@@ -43,7 +44,7 @@ public class SigninPersistentState extends PersistentState {
 			UUID uuid = playerNbt.getUuid(UUID_KEY);
 			MutableRecord record = new MutableRecord();
 			record.makeupCards = playerNbt.contains(MAKEUP_CARDS_KEY, NbtElement.INT_TYPE)
-				? playerNbt.getInt(MAKEUP_CARDS_KEY)
+				? clampMakeupCards(playerNbt.getInt(MAKEUP_CARDS_KEY))
 				: 0;
 
 			if (playerNbt.contains(SIGNED_DAYS_KEY, NbtElement.LIST_TYPE)) {
@@ -107,8 +108,11 @@ public class SigninPersistentState extends PersistentState {
 			return;
 		}
 		MutableRecord record = getRecord(uuid);
-		record.makeupCards += amount;
-		markDirty();
+		int updated = clampMakeupCards((long) record.makeupCards + amount);
+		if (updated != record.makeupCards) {
+			record.makeupCards = updated;
+			markDirty();
+		}
 	}
 
 	public synchronized boolean consumeMakeupCard(UUID uuid) {
@@ -190,6 +194,10 @@ public class SigninPersistentState extends PersistentState {
 
 	private MutableRecord getRecord(UUID uuid) {
 		return records.computeIfAbsent(uuid, key -> new MutableRecord());
+	}
+
+	private static int clampMakeupCards(long value) {
+		return (int) Math.max(0L, Math.min(value, SigninLimits.MAX_MAKEUP_CARDS_STORED));
 	}
 
 	private static final class MutableRecord {

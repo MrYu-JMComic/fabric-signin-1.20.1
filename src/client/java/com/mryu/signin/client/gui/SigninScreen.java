@@ -71,7 +71,7 @@ public class SigninScreen extends Screen {
 		signButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.signin.button.sign"), button -> SigninClientActions.signToday())
 			.dimensions(0, 0, 120, 20)
 			.build());
-		makeupButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.signin.button.makeup"), button -> SigninClientActions.makeupYesterday())
+		makeupButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.signin.button.makeup"), button -> SigninClientActions.makeupLatestMissedDay())
 			.dimensions(0, 0, 120, 20)
 			.build());
 		refreshButton = addDrawableChild(ButtonWidget.builder(Text.translatable("gui.signin.button.refresh"), button -> SigninClientActions.requestSync())

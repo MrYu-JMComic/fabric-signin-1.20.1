@@ -6,6 +6,7 @@ import com.mryu.signin.client.ui.RewardDisplayUtil;
 import com.mryu.signin.client.ui.UiLayout;
 import com.mryu.signin.client.ui.UiRender;
 import com.mryu.signin.client.ui.UiTheme;
+import com.mryu.signin.config.SigninLimits;
 import com.mryu.signin.data.RewardEntry;
 import com.mryu.signin.data.RewardItemEntry;
 import com.mryu.signin.data.SigninConfigState;
@@ -256,11 +257,11 @@ public class RewardEditorScreen extends Screen {
 			RewardEntry reward = getDraftByDay(day);
 
 			TextFieldWidget xpField = addDrawableChild(new TextFieldWidget(textRenderer, 0, 0, 64, 16, Text.translatable("gui.reward_editor.header.xp")));
-			xpField.setMaxLength(8);
+			xpField.setMaxLength(String.valueOf(SigninLimits.MAX_REWARD_XP).length());
 			xpField.setText(String.valueOf(reward.xp()));
 
 			TextFieldWidget cardField = addDrawableChild(new TextFieldWidget(textRenderer, 0, 0, 64, 16, Text.translatable("gui.reward_editor.header.card")));
-			cardField.setMaxLength(6);
+			cardField.setMaxLength(String.valueOf(SigninLimits.MAX_MAKEUP_CARD_REWARD).length());
 			cardField.setText(String.valueOf(reward.makeupCardReward()));
 
 			final int rewardDay = day;
@@ -429,11 +430,19 @@ public class RewardEditorScreen extends Screen {
 
 	private void saveChanges() {
 		for (RowWidgets row : rows) {
-			int xp = parseNonNegativeInt(row.xpField.getText(), Text.translatable("gui.reward_editor.header.xp").getString());
+			int xp = parseBoundedNonNegativeInt(
+				row.xpField.getText(),
+				Text.translatable("gui.reward_editor.header.xp").getString(),
+				SigninLimits.MAX_REWARD_XP
+			);
 			if (xp < 0) {
 				return;
 			}
-			int cardCount = parseNonNegativeInt(row.cardField.getText(), Text.translatable("gui.reward_editor.header.card").getString());
+			int cardCount = parseBoundedNonNegativeInt(
+				row.cardField.getText(),
+				Text.translatable("gui.reward_editor.header.card").getString(),
+				SigninLimits.MAX_MAKEUP_CARD_REWARD
+			);
 			if (cardCount < 0) {
 				return;
 			}
@@ -467,8 +476,8 @@ public class RewardEditorScreen extends Screen {
 
 	private void captureDraftFromWidgets() {
 		for (RowWidgets row : rows) {
-			int xp = parsePositiveOrZero(row.xpField.getText());
-			int card = parsePositiveOrZero(row.cardField.getText());
+			int xp = parseNonNegativeOrZero(row.xpField.getText(), SigninLimits.MAX_REWARD_XP);
+			int card = parseNonNegativeOrZero(row.cardField.getText(), SigninLimits.MAX_MAKEUP_CARD_REWARD);
 			updateDraftValue(row.day, xp, card);
 		}
 		draftRewards.sort(Comparator.comparingInt(RewardEntry::day));
@@ -659,11 +668,15 @@ public class RewardEditorScreen extends Screen {
 		return statusText != null && !statusText.getString().isBlank();
 	}
 
-	private int parseNonNegativeInt(String text, String label) {
+	private int parseBoundedNonNegativeInt(String text, String label, int max) {
 		try {
 			int value = Integer.parseInt(text.trim());
 			if (value < 0) {
 				setStatus(Text.translatable("gui.common.error.non_negative", label).getString(), 0xFFFF7B7B);
+				return -1;
+			}
+			if (value > max) {
+				setStatus(Text.translatable("gui.common.error.max_value", label, max).getString(), 0xFFFF7B7B);
 				return -1;
 			}
 			return value;
@@ -673,9 +686,9 @@ public class RewardEditorScreen extends Screen {
 		}
 	}
 
-	private int parsePositiveOrZero(String text) {
+	private int parseNonNegativeOrZero(String text, int max) {
 		try {
-			return Math.max(0, Integer.parseInt(text.trim()));
+			return Math.max(0, Math.min(Integer.parseInt(text.trim()), max));
 		} catch (NumberFormatException exception) {
 			return 0;
 		}

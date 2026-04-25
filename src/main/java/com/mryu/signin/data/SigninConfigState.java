@@ -15,6 +15,7 @@ import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -84,8 +85,12 @@ public final class SigninConfigState {
 		}
 
 		YearRewardData data = getOrLoadYearData(year);
+		YearRewardsSnapshot previous = data.snapshot();
 		data.setRewards(normalized);
-		writeYearFile(data);
+		if (!writeYearFile(data)) {
+			data.setRewards(previous.rewards());
+			return false;
+		}
 		return true;
 	}
 
@@ -110,34 +115,40 @@ public final class SigninConfigState {
 
 	private YearRewardData loadYearData(int year) {
 		Path filePath = configDirectory.resolve(FILE_PREFIX + year + FILE_SUFFIX);
-		List<RewardEntry> rewards = readRewardsFromFile(filePath);
-		List<RewardEntry> normalized = normalizeLooseRewards(rewards, year);
+		ReadRewardsResult readResult = readRewardsFromFile(filePath);
+		List<RewardEntry> normalized = normalizeLooseRewards(readResult.rewards(), year);
 
 		YearRewardData data = new YearRewardData(year, filePath);
 		data.setRewards(normalized);
-		if (rewards == null || !normalized.equals(rewards)) {
+		if (readResult.status() == ReadStatus.MISSING || readResult.status() == ReadStatus.LOADED && !normalized.equals(readResult.rewards())) {
 			writeYearFile(data);
+		} else if (readResult.status() == ReadStatus.INVALID) {
+			boolean backedUp = backupBrokenFile(filePath);
+			if (backedUp) {
+				writeYearFile(data);
+			}
 		}
 		return data;
 	}
 
-	private List<RewardEntry> readRewardsFromFile(Path path) {
+	private ReadRewardsResult readRewardsFromFile(Path path) {
 		if (!Files.exists(path)) {
-			return null;
+			return new ReadRewardsResult(ReadStatus.MISSING, null);
 		}
 		try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
 			RewardConfigFile file = GSON.fromJson(reader, RewardConfigFile.class);
 			if (file == null || file.rewards == null) {
-				return null;
+				Signin.LOGGER.warn("Sign-in reward file {} has no valid rewards array. It will be backed up before defaults are written.", path);
+				return new ReadRewardsResult(ReadStatus.INVALID, null);
 			}
-			return file.rewards;
+			return new ReadRewardsResult(ReadStatus.LOADED, file.rewards);
 		} catch (Exception exception) {
-			Signin.LOGGER.warn("Failed to load sign-in reward file {}. Defaults will be used.", path, exception);
-			return null;
+			Signin.LOGGER.warn("Failed to load sign-in reward file {}. It will be backed up before defaults are written.", path, exception);
+			return new ReadRewardsResult(ReadStatus.INVALID, null);
 		}
 	}
 
-	private void writeYearFile(YearRewardData data) {
+	private boolean writeYearFile(YearRewardData data) {
 		try {
 			Files.createDirectories(configDirectory);
 			RewardConfigFile file = new RewardConfigFile();
@@ -154,8 +165,25 @@ public final class SigninConfigState {
 			)) {
 				GSON.toJson(file, writer);
 			}
+			return true;
 		} catch (IOException exception) {
 			Signin.LOGGER.error("Failed to save sign-in reward file {}", data.filePath(), exception);
+			return false;
+		}
+	}
+
+	private boolean backupBrokenFile(Path path) {
+		if (!Files.exists(path)) {
+			return true;
+		}
+		Path backupPath = path.resolveSibling(path.getFileName() + ".broken-" + System.currentTimeMillis());
+		try {
+			Files.move(path, backupPath, StandardCopyOption.REPLACE_EXISTING);
+			Signin.LOGGER.warn("Backed up broken sign-in reward file {} to {}.", path, backupPath);
+			return true;
+		} catch (IOException exception) {
+			Signin.LOGGER.error("Failed to back up broken sign-in reward file {}. Defaults will not overwrite it.", path, exception);
+			return false;
 		}
 	}
 
@@ -261,5 +289,14 @@ public final class SigninConfigState {
 		private int year;
 		private int daysInYear;
 		private List<RewardEntry> rewards = List.of();
+	}
+
+	private enum ReadStatus {
+		MISSING,
+		LOADED,
+		INVALID
+	}
+
+	private record ReadRewardsResult(ReadStatus status, List<RewardEntry> rewards) {
 	}
 }

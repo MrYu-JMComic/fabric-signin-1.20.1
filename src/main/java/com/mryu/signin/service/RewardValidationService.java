@@ -31,6 +31,12 @@ public final class RewardValidationService {
 			if (reward == null) {
 				return null;
 			}
+			if (reward.xp() < SigninLimits.MIN_REWARD_XP || reward.xp() > SigninLimits.MAX_REWARD_XP) {
+				return null;
+			}
+			if (reward.makeupCardReward() < SigninLimits.MIN_MAKEUP_CARD_REWARD || reward.makeupCardReward() > SigninLimits.MAX_MAKEUP_CARD_REWARD) {
+				return null;
+			}
 
 			RewardEntry fixed = reward.normalized();
 			if (fixed.day() < 1 || fixed.day() > expectedDays) {
@@ -44,7 +50,10 @@ public final class RewardValidationService {
 			}
 
 			for (RewardItemEntry item : fixed.items()) {
-				if (item.itemCount() <= 0 || item.itemCount() > SigninLimits.MAX_REWARD_ITEM_COUNT) {
+				if (item.itemCount() < SigninLimits.MIN_REWARD_ITEM_COUNT || item.itemCount() > SigninLimits.MAX_REWARD_ITEM_COUNT) {
+					return null;
+				}
+				if (item.itemData() != null && item.itemData().length() > SigninLimits.MAX_ITEM_DATA_LENGTH) {
 					return null;
 				}
 				if (!RewardItemResolver.isValidItemId(item.itemId())) {
