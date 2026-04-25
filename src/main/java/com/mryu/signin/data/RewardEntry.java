@@ -1,5 +1,7 @@
 package com.mryu.signin.data;
 
+import com.mryu.signin.config.SigninLimits;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -26,13 +28,17 @@ public record RewardEntry(
 		}
 		return new RewardEntry(
 			Math.max(1, day),
-			Math.max(0, xp),
+			clamp(xp, SigninLimits.MIN_REWARD_XP, SigninLimits.MAX_REWARD_XP),
 			normalizedItems,
-			Math.max(0, makeupCardReward)
+			clamp(makeupCardReward, SigninLimits.MIN_MAKEUP_CARD_REWARD, SigninLimits.MAX_MAKEUP_CARD_REWARD)
 		);
 	}
 
 	public boolean hasItems() {
 		return !items.isEmpty();
+	}
+
+	private static int clamp(int value, int min, int max) {
+		return Math.max(min, Math.min(value, max));
 	}
 }

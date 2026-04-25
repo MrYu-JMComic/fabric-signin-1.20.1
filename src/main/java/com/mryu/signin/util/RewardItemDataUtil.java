@@ -5,15 +5,12 @@ import net.minecraft.nbt.NbtCompound;
 import net.minecraft.nbt.StringNbtReader;
 
 import java.util.LinkedHashMap;
-import java.util.Locale;
 import java.util.Map;
 
 public final class RewardItemDataUtil {
-	public static final String COMPONENT_PREFIX = "components:";
 	private static final int DATA_CACHE_LIMIT = 256;
 	private static final int MAX_CACHED_TEXT_LENGTH = 4096;
 	private static final ParsedItemData EMPTY_DATA = new ParsedItemData(ItemDataKind.EMPTY, null);
-	private static final ParsedItemData COMPONENT_DATA = new ParsedItemData(ItemDataKind.COMPONENT_TEXT, null);
 	private static final Map<String, ParsedItemData> PARSED_DATA_CACHE = new LinkedHashMap<>(DATA_CACHE_LIMIT, 0.75f, true) {
 		@Override
 		protected boolean removeEldestEntry(Map.Entry<String, ParsedItemData> eldest) {
@@ -30,15 +27,6 @@ public final class RewardItemDataUtil {
 
 	public static boolean isItemDataSyntaxValid(String itemDataText) {
 		return analyze(itemDataText).kind() != ItemDataKind.INVALID;
-	}
-
-	public static boolean isComponentDataText(String itemDataText) {
-		if (itemDataText == null) {
-			return false;
-		}
-		String trimmed = itemDataText.trim();
-		String lower = trimmed.toLowerCase(Locale.ROOT);
-		return lower.startsWith(COMPONENT_PREFIX) && trimmed.length() > COMPONENT_PREFIX.length();
 	}
 
 	public static NbtCompound parseSnbtOrNull(String itemDataText) {
@@ -66,10 +54,6 @@ public final class RewardItemDataUtil {
 		}
 
 		String trimmed = itemDataText.trim();
-		if (isComponentDataText(trimmed)) {
-			return COMPONENT_DATA;
-		}
-
 		ParsedItemData cached = getCached(trimmed);
 		if (cached != null) {
 			return cached;
@@ -117,7 +101,6 @@ public final class RewardItemDataUtil {
 	public enum ItemDataKind {
 		EMPTY,
 		SNBT,
-		COMPONENT_TEXT,
 		INVALID;
 
 		private ParsedItemData data(NbtCompound nbt) {

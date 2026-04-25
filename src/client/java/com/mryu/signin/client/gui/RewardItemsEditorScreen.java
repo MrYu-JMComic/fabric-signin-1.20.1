@@ -351,6 +351,10 @@ public class RewardItemsEditorScreen extends Screen {
 					setStatus(Text.translatable("gui.reward_items.error.count_positive").getString(), 0xFFFF7B7B);
 					return;
 				}
+				if (count > SigninLimits.MAX_REWARD_ITEM_COUNT) {
+					setStatus(Text.translatable("gui.reward_items.error.count_too_large", SigninLimits.MAX_REWARD_ITEM_COUNT).getString(), 0xFFFF7B7B);
+					return;
+				}
 			} catch (NumberFormatException exception) {
 				setStatus(Text.translatable("gui.reward_items.error.count_integer").getString(), 0xFFFF7B7B);
 				return;
@@ -389,7 +393,7 @@ public class RewardItemsEditorScreen extends Screen {
 
 	private int parsePositiveOrOne(String text) {
 		try {
-			return Math.max(1, Integer.parseInt(text.trim()));
+			return Math.max(1, Math.min(Integer.parseInt(text.trim()), SigninLimits.MAX_REWARD_ITEM_COUNT));
 		} catch (NumberFormatException exception) {
 			return 1;
 		}

@@ -57,7 +57,7 @@ public final class SigninService {
 		return result(true, message, dataState, player, today, reward);
 	}
 
-	public static SigninResult makeupYesterday(MinecraftServer server, ServerPlayerEntity player) {
+	public static SigninResult makeupLatestMissedDay(MinecraftServer server, ServerPlayerEntity player) {
 		LocalDate todayDate = todayDate();
 		long today = todayDate.toEpochDay();
 		SigninPersistentState dataState = SigninPersistentState.get(server);

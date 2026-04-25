@@ -22,13 +22,6 @@
 			"com.mryu.signin.client.SigninClient"
 		]
 	},
-	"mixins": [
-		"signin.mixins.json",
-		{
-			"config": "signin.client.mixins.json",
-			"environment": "client"
-		}
-	],
 	"depends": {
 		"fabricloader": ">=0.18.4",
 		"minecraft": "~1.20.1",

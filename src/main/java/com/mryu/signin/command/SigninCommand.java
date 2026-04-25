@@ -94,7 +94,7 @@ public final class SigninCommand {
 
 	private static int makeup(ServerCommandSource source) throws CommandSyntaxException {
 		ServerPlayerEntity player = source.getPlayerOrThrow();
-		SigninResult result = SigninService.makeupYesterday(source.getServer(), player);
+		SigninResult result = SigninService.makeupLatestMissedDay(source.getServer(), player);
 		player.sendMessage(result.message().copy().formatted(result.success() ? Formatting.GREEN : Formatting.RED), false);
 		SigninNetworking.sendSync(
 			player,

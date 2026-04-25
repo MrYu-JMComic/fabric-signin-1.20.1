@@ -25,7 +25,7 @@ Daily sign-in mod for Minecraft Fabric 1.20.1, with client GUI + server data syn
 
 ![每日物品奖励编辑界面](./img/3.png)
 
-注释：用于配置单日多物品奖励，支持物品 ID、数量、NBT/组件数据编辑与预览。
+注释：用于配置单日多物品奖励，支持物品 ID、数量、NBT 数据编辑与预览。
 
 ## License
 

@@ -5,6 +5,7 @@ plugins {
 
 version = project.mod_version
 group = project.maven_group
+def archiveProjectName = project.name
 
 repositories {
 	// Add repositories to retrieve artifacts from in here.
@@ -60,10 +61,10 @@ java {
 }
 
 jar {
-	inputs.property "projectName", project.name
+	inputs.property "projectName", archiveProjectName
 
 	from("LICENSE") {
-		rename { "${it}_${project.name}"}
+		rename { "${it}_${archiveProjectName}"}
 	}
 }
 
